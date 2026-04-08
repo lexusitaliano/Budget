@@ -307,19 +307,19 @@
         <div class="ios-group">
           <div class="ios-field">
             <label for="start">Start Checking</label>
-            <input id="start" inputmode="decimal" type="text" autocomplete="off" placeholder="0.00" />
+            <input id="start" inputmode="decimal" type="text" autocomplete="off" placeholder="$0.00" />
           </div>
           <div class="ios-field">
             <label for="end">End Checking</label>
-            <input id="end" inputmode="decimal" type="text" autocomplete="off" placeholder="0.00" />
+            <input id="end" inputmode="decimal" type="text" autocomplete="off" placeholder="$0.00" />
           </div>
           <div class="ios-field">
             <label for="tOut">Transfers Out</label>
-            <input id="tOut" inputmode="decimal" type="text" autocomplete="off" placeholder="0.00" />
+            <input id="tOut" inputmode="decimal" type="text" autocomplete="off" placeholder="$0.00 (optional)" />
           </div>
           <div class="ios-field">
             <label for="cc">Credit Card</label>
-            <input id="cc" inputmode="decimal" type="text" autocomplete="off" placeholder="0.00" />
+            <input id="cc" inputmode="decimal" type="text" autocomplete="off" placeholder="$0.00 (optional)" />
           </div>
         </div>
 
@@ -338,11 +338,11 @@
       <div class="preview" aria-label="Year summary">
         <div class="kpi">
           <div class="label" id="kpiSpendLabel">Total Spend</div>
-          <div class="value" id="kpiSpend">$0</div>
+          <div class="value" id="kpiSpend">$0.00</div>
         </div>
         <div class="kpi">
           <div class="label" id="kpiDeltaLabel">Checking Δ</div>
-          <div class="value" id="kpiDelta">$0</div>
+          <div class="value" id="kpiDelta">$0.00</div>
         </div>
         <div class="kpi">
           <div class="label">Months</div>
@@ -462,11 +462,12 @@
     const storeKey = 'spend-tracker-v3';
     const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
-    function guessCurrency(){
-      try { const loc = Intl.DateTimeFormat().resolvedOptions().locale; if(loc && loc.startsWith('en-US')) return 'USD'; } catch(e){}
-      return 'USD';
-    }
-    const fmt = new Intl.NumberFormat(undefined, {style:'currency', currency: guessCurrency(), maximumFractionDigits: 2});
+    const fmt = new Intl.NumberFormat('en-US', {
+      style:'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
 
     function pad2(n){ return String(n).padStart(2,'0'); }
     function monthId(year, monthIndex0){ return `${year}-${pad2(monthIndex0+1)}`; }
@@ -489,12 +490,31 @@
       return { delta: clampMoney(delta), totalSaved: clampMoney(totalSaved), spend: clampMoney(spend) };
     }
 
+    function normalizeMonthRecord(raw){
+      const start = parseDecimal(raw?.start);
+      const end = parseDecimal(raw?.end);
+      const tOut = parseDecimal(raw?.tOut);
+      const cc = parseDecimal(raw?.cc);
+      return {
+        id: raw?.id,
+        start: Number.isFinite(start) ? clampMoney(start) : NaN,
+        end: Number.isFinite(end) ? clampMoney(end) : NaN,
+        tOut: Number.isFinite(tOut) ? clampMoney(tOut) : 0,
+        cc: Number.isFinite(cc) ? clampMoney(cc) : 0
+      };
+    }
+
     function loadState(){
       try {
         const raw = localStorage.getItem(storeKey);
         if(!raw) return {months:[], ui:{filterYear:'ALL', sort:'DESC'}};
         const parsed = JSON.parse(raw);
-        return { months: Array.isArray(parsed.months) ? parsed.months : [], ui: parsed.ui || {filterYear:'ALL', sort:'DESC'} };
+        const months = Array.isArray(parsed.months)
+          ? parsed.months
+              .map(normalizeMonthRecord)
+              .filter(m => /^\d{4}-\d{2}$/.test(m.id) && Number.isFinite(m.start) && Number.isFinite(m.end))
+          : [];
+        return { months, ui: parsed.ui || {filterYear:'ALL', sort:'DESC'} };
       } catch(e) { return {months:[], ui:{filterYear:'ALL', sort:'DESC'}}; }
     }
     function saveState(){ localStorage.setItem(storeKey, JSON.stringify(state)); }
@@ -559,17 +579,44 @@
     }
 
     // Validation & State
+    function parseOptionalMoney(text){
+      const raw = String(text ?? '').trim();
+      if(!raw) return 0;
+      const parsed = parseDecimal(raw);
+      return Number.isFinite(parsed) ? parsed : NaN;
+    }
+
     function validateEntry({start,end,cc,tOut}){
       const errs = [];
       if(!Number.isFinite(start)) errs.push('Valid Start Checking required.');
       if(!Number.isFinite(end)) errs.push('Valid End Checking required.');
-      if(!Number.isFinite(tOut)) errs.push('Valid Transfers Out required.');
-      if(!Number.isFinite(cc)) errs.push('Valid Credit Card Spend required.');
+      if(!Number.isFinite(tOut)) errs.push('Transfers Out must be a valid amount or left blank.');
+      if(!Number.isFinite(cc)) errs.push('Credit Card Spend must be a valid amount or left blank.');
       return errs;
     }
 
     function entryPayload(){
-      return { start: parseDecimal($('#start').value), end: parseDecimal($('#end').value), tOut: parseDecimal($('#tOut').value), cc: parseDecimal($('#cc').value) };
+      return {
+        start: parseDecimal($('#start').value),
+        end: parseDecimal($('#end').value),
+        tOut: parseOptionalMoney($('#tOut').value),
+        cc: parseOptionalMoney($('#cc').value)
+      };
+    }
+
+    function formatInputMoney(el, allowEmpty=false){
+      const raw = String(el.value ?? '').trim();
+      if(!raw){
+        el.value = allowEmpty ? '' : fmt.format(0);
+        return;
+      }
+      const n = parseDecimal(raw);
+      if(Number.isFinite(n)) el.value = fmt.format(clampMoney(n));
+    }
+
+    function unformatInputMoney(el){
+      const n = parseDecimal(el.value);
+      if(Number.isFinite(n)) el.value = n.toFixed(2);
     }
 
     function setPreview(){
@@ -609,13 +656,17 @@
             <div>
               <div class="monthCardTitle">${displayMonth(m.id)}</div>
               <div class="monthCardMeta">Start: ${fmt.format(m.start)} · End: ${fmt.format(m.end)}</div>
+              <div style="color:var(--good); font-size:16px; font-weight:600; margin-top:4px;">Saved: ${fmt.format(c.totalSaved)}</div>
             </div>
-            <button class="btn iconbtn danger" aria-label="Delete" data-act="del" data-id="${m.id}">🗑️</button>
+            <div class="row" style="gap:6px;">
+              <button class="btn iconbtn" aria-label="Edit" data-act="edit" data-id="${m.id}">✏️</button>
+              <button class="btn iconbtn danger" aria-label="Delete" data-act="del" data-id="${m.id}">🗑️</button>
+            </div>
           </div>
-          <div class="monthCardGrid" style="cursor:pointer" data-act="edit" data-id="${m.id}">
+          <div class="monthCardGrid">
             <div class="kv"><div class="k">Spend</div><div class="v" style="color:var(--text)">${fmt.format(c.spend)}</div></div>
-            <div class="kv"><div class="k">Saved</div><div class="v" style="color:var(--good)">${fmt.format(c.totalSaved)}</div></div>
             <div class="kv"><div class="k">CC Spend</div><div class="v">${fmt.format(m.cc)}</div></div>
+            <div class="kv"><div class="k">Transfers Out</div><div class="v">${fmt.format(m.tOut)}</div></div>
             <div class="kv"><div class="k">Difference</div><div class="v ${c.delta < 0 ? 'bad' : 'good'}">${fmt.format(c.delta)}</div></div>
           </div>
         `;
@@ -664,7 +715,7 @@
         return;
       }
 
-      const padL = 40, padR = 40, padT = 20, padB = 30;
+      const padL = 52, padR = 52, padT = 24, padB = 36;
       const innerW = W - padL - padR;
       const innerH = H - padT - padB;
 
@@ -685,9 +736,24 @@
         return el;
       };
 
-      // Gridlines
-      svg.appendChild(make('line',{x1:padL,y1:padT+innerH,x2:padL+innerW,y2:padT+innerH, stroke:'var(--border)'}));
+      // Gridlines + both Y axes
+      const yTicks = [0, 0.5, 1];
+      yTicks.forEach(ratio => {
+        const yy = padT + innerH - ratio * innerH;
+        svg.appendChild(make('line',{x1:padL,y1:yy,x2:padL+innerW,y2:yy, stroke:'var(--border)'}));
+        const endVal = endMin + (endMax - endMin) * ratio;
+        const ccVal = ccMax * ratio;
+        svg.appendChild(make('text',{
+          x: padL - 6, y: yy + 4, 'text-anchor':'end', fill:'var(--muted)', 'font-size':'10'
+        })).textContent = fmt.format(endVal);
+        svg.appendChild(make('text',{
+          x: padL + innerW + 6, y: yy + 4, 'text-anchor':'start', fill:'var(--muted)', 'font-size':'10'
+        })).textContent = fmt.format(ccVal);
+      });
       svg.appendChild(make('line',{x1:padL,y1:padT,x2:padL,y2:padT+innerH, stroke:'var(--border)'}));
+      svg.appendChild(make('line',{x1:padL+innerW,y1:padT,x2:padL+innerW,y2:padT+innerH, stroke:'var(--border)'}));
+      svg.appendChild(make('text',{x: padL, y: 14, fill:'var(--acc)', 'font-size':'10'})).textContent = 'Ending Balance (USD)';
+      svg.appendChild(make('text',{x: padL + innerW, y: 14, fill:'var(--warn)', 'text-anchor':'end', 'font-size':'10'})).textContent = 'Credit Card Spend (USD)';
       
       // Paths
       const pathFor = (arr, fn) => arr.map((v,i)=>`${i===0?'M':'L'} ${x(i)} ${fn(v)}`).join(' ');
@@ -723,9 +789,9 @@
       
       t.innerHTML = `
         <div class="t">${displayMonth(data.id)}</div>
-        <div class="l">End: <span class="mono">${fmt.format(data.end)}</span></div>
-        <div class="l">CC: <span class="mono">${fmt.format(data.cc)}</span></div>
-        <div class="l">Spend: <span class="mono" style="font-weight:bold; color:var(--text)">${fmt.format(data.spend)}</span></div>
+        <div class="l">End Balance (USD): <span class="mono">${fmt.format(data.end)}</span></div>
+        <div class="l">CC Spend (USD): <span class="mono">${fmt.format(data.cc)}</span></div>
+        <div class="l">Total Spend (USD): <span class="mono" style="font-weight:bold; color:var(--text)">${fmt.format(data.spend)}</span></div>
       `;
       
       // Smart positioning: Keep inside viewport
@@ -756,19 +822,32 @@
       const [y, mm] = m.id.split('-');
       $('#yearSel').value = String(Number(y));
       $('#monthSel').value = String(Number(mm)-1);
-      $('#start').value = String(m.start.toFixed(2));
-      $('#end').value = String(m.end.toFixed(2));
-      $('#tOut').value = String(m.tOut.toFixed(2));
-      $('#cc').value = String(m.cc.toFixed(2));
+      $('#start').value = fmt.format(m.start);
+      $('#end').value = fmt.format(m.end);
+      $('#tOut').value = m.tOut === 0 ? '' : fmt.format(m.tOut);
+      $('#cc').value = m.cc === 0 ? '' : fmt.format(m.cc);
       window.scrollTo({top: 0, behavior: 'smooth'});
       setPreview();
     }
 
+    let editingId = null;
+    function setEditingState(id){
+      editingId = id || null;
+      $('#saveBtn').textContent = editingId ? 'Update' : 'Save';
+    }
+
     function wire(){
       ['start','end','tOut','cc'].forEach(id=>{
-        $('#'+id).addEventListener('input', setPreview);
+        const input = $('#'+id);
+        const isOptional = id === 'tOut' || id === 'cc';
+        input.addEventListener('input', setPreview);
+        input.addEventListener('focus', ()=>unformatInputMoney(input));
+        input.addEventListener('blur', ()=>{
+          formatInputMoney(input, isOptional);
+          setPreview();
+        });
         // Default to empty strings for placeholders to show
-        if(!$('#'+id).value) $('#'+id).value = ''; 
+        if(!input.value) input.value = '';
       });
 
       $('#monthSel').addEventListener('change', setPreview);
@@ -777,13 +856,13 @@
       $('#usePrevEnd').addEventListener('click', ()=>{
         const prev = getPrevMonthForSelected();
         if(!prev) return toast('No prior month found.');
-        $('#start').value = prev.end.toFixed(2);
+        $('#start').value = fmt.format(prev.end);
         setPreview();
       });
       
       $('#copyStartToEnd').addEventListener('click', ()=>{
         const s = parseDecimal($('#start').value);
-        if(Number.isFinite(s)) { $('#end').value = s.toFixed(2); setPreview(); }
+        if(Number.isFinite(s)) { $('#end').value = fmt.format(s); setPreview(); }
       });
 
       $('#entryForm').addEventListener('submit', (ev)=>{
@@ -801,6 +880,10 @@
         errHost.classList.remove('show');
         const id = selectedId();
         
+        if(editingId){
+          const editingIdx = state.months.findIndex(m => m.id === editingId);
+          if(editingIdx >= 0) state.months.splice(editingIdx, 1);
+        }
         const idx = state.months.findIndex(m => m.id === id);
         if(idx >= 0) state.months[idx] = {id, ...payload};
         else state.months.push({id, ...payload});
@@ -810,6 +893,7 @@
         
         // Reset form for next entry
         $('#start').value=''; $('#end').value=''; $('#cc').value=''; $('#tOut').value='';
+        setEditingState(null);
         toast('Month saved successfully.');
       });
 
@@ -830,7 +914,10 @@
         const id = btn.getAttribute('data-id');
         const act = btn.getAttribute('data-act');
         
-        if(act === 'edit') loadIntoForm(id);
+        if(act === 'edit') {
+          setEditingState(id);
+          loadIntoForm(id);
+        }
         if(act === 'del') {
           if(confirm(`Delete ${displayMonth(id)}?`)){
             state.months = state.months.filter(x=>x.id!==id);
