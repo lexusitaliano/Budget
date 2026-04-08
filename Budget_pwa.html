@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0, viewport-fit=cover" />
+  <title>Spending & Savings Tracker</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-title" content="MyApp">
+  <meta name="theme-color" content="#000000">
+  <style>
+    :root {
+      --bg: #000000;
+      --bg-secondary: #111111;
+      --panel: #1c1c1e; /* iOS Dark Mode Gray */
+      --panel2: #2c2c2e;
+      --muted: #8e8e93; /* iOS Gray */
+      --text: #ffffff;
+      --acc: #0a84ff; /* iOS Blue */
+      --good: #32d74b; /* iOS Green */
+      --warn: #ff9f0a; /* iOS Orange */
+      --bad: #ff453a; /* iOS Red */
+      --border: rgba(255, 255, 255, 0.15);
+      --shadow: 0 8px 30px rgba(0,0,0,0.5);
+      --radius: 12px;
+      
+      /* Safe area insets for iPhones with notches */
+      --safe-bottom: env(safe-area-inset-bottom, 20px);
+    }
+    
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; width: 100%; overflow-x: hidden; }
+    
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.4;
+      padding-bottom: calc(80px + var(--safe-bottom)); /* Leave room for sticky bar */
+    }
+    
+    a { color: var(--acc); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    
+    /* Typography */
+    h1 { font-size: 28px; font-weight: 700; margin: 0; letter-spacing: 0.5px; }
+    h2 { font-size: 20px; font-weight: 600; margin: 0 0 16px; letter-spacing: 0.3px; }
+    .sub { color: var(--muted); font-size: 15px; margin-top: 4px; }
+    .hint { color: var(--muted); font-size: 13px; margin: 8px 0; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    /* Layout */
+    .wrap { max-width: 800px; margin: 0 auto; padding: 16px; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .space-between { justify-content: space-between; }
+    
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 16px 12px;
+      position: sticky;
+      top: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 100;
+      max-width: 800px;
+      margin: 0 auto;
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* Buttons */
+    .btn {
+      background: var(--panel2);
+      color: var(--acc);
+      border: none;
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 15px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 44px; /* iOS Minimum Touch Target */
+      width: auto;
+      transition: opacity 0.2s;
+    }
+    .btn:active { opacity: 0.7; }
+    .btn.primary { background: var(--acc); color: #fff; }
+    .btn.danger { color: var(--bad); }
+    .btn.iconbtn { width: 44px; padding: 0; font-size: 18px; background: transparent; }
+    .btn.small { min-height: 36px; padding: 6px 12px; font-size: 13px; border-radius: 8px; }
+    .btn.full { width: 100%; margin-top: 8px; }
+
+    /* iOS Native-style Grouped Forms */
+    .ios-group {
+      background: var(--panel);
+      border-radius: var(--radius);
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    .ios-field {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      min-height: 48px;
+    }
+    .ios-field:last-child { border-bottom: none; }
+    .ios-field label {
+      font-size: 16px;
+      color: var(--text);
+      font-weight: 400;
+      flex-shrink: 0;
+    }
+    .ios-field input, .ios-field select {
+      background: transparent;
+      border: none;
+      text-align: right;
+      /* 16px font-size is CRITICAL on mobile to prevent iOS auto-zoom on focus */
+      font-size: 16px; 
+      color: var(--text);
+      outline: none;
+      width: 100%;
+      margin-left: 16px;
+      padding: 0;
+      font-family: inherit;
+    }
+    .ios-field input::placeholder { color: var(--muted); }
+    .ios-field select { color: var(--acc); direction: rtl; appearance: none; -webkit-appearance: none; }
+    
+    /* Errors */
+    .errors { display: none; margin-bottom: 16px; }
+    .errors.show { display: block; }
+    .err { background: rgba(255, 69, 58, 0.15); color: var(--bad); padding: 12px; border-radius: 8px; font-size: 14px; margin-bottom: 8px; }
+
+    /* KPIs / Preview Grid */
+    .preview {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    .kpi {
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: 12px 10px;
+      text-align: center;
+    }
+    .kpi .label { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .kpi .value { margin-top: 6px; font-size: 15px; font-weight: 700; }
+    .kpi .value.good { color: var(--good); }
+    .kpi .value.warn { color: var(--warn); }
+    .kpi .value.bad { color: var(--bad); }
+
+    /* Sticky Save Bar */
+    .saveBar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(28, 28, 30, 0.95);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 12px 16px calc(12px + var(--safe-bottom));
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 90;
+      gap: 16px;
+    }
+    
+    /* Months Cards (Mobile default) */
+    .monthCards { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
+    .monthCard { background: var(--panel); border-radius: var(--radius); padding: 16px; }
+    .monthCardHeader { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 12px; }
+    .monthCardTitle { font-size: 18px; font-weight: 700; }
+    .monthCardMeta { font-size: 13px; color: var(--muted); }
+    .monthCardGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .kv { display: flex; flex-direction: column; }
+    .kv .k { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+    .kv .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* Desktop Table (Hidden on small screens) */
+    .table-container { display: none; overflow-x: auto; margin-top: 16px; background: var(--panel); border-radius: var(--radius); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 14px; text-align: right; border-bottom: 1px solid var(--border); font-size: 14px; white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+
+    /* Chart */
+    .chart-container { background: var(--panel); border-radius: var(--radius); padding: 16px 8px; margin-bottom: 24px; position: relative; }
+    #chart { display: block; width: 100%; height: auto; }
+    .legend { display: flex; gap: 16px; justify-content: center; font-size: 12px; color: var(--muted); margin-bottom: 16px; flex-wrap: wrap; }
+    .key { display: flex; align-items: center; gap: 6px; }
+    .swatch { width: 10px; height: 10px; border-radius: 50%; }
+    .swatch.end { background: var(--acc); }
+    .swatch.cc { background: var(--warn); }
+    
+    .tooltip {
+      position: fixed;
+      z-index: 9999;
+      pointer-events: none;
+      background: rgba(28, 28, 30, 0.95);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      color: var(--text);
+      display: none;
+      min-width: 140px;
+    }
+    .tooltip.show { display: block; }
+    .tooltip .t { font-weight: 700; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    .tooltip .l { color: var(--muted); display: flex; justify-content: space-between; margin-bottom: 4px; }
+    .tooltip .mono { color: var(--text); margin-left: 12px; }
+
+    /* Native-style Bottom Sheet Dialogs */
+    dialog {
+      border: none;
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 20px 20px 0 0;
+      padding: 24px 16px calc(24px + var(--safe-bottom));
+      margin: 0;
+      margin-top: auto;
+      width: 100%;
+      max-width: 100%;
+      box-shadow: 0 -10px 40px rgba(0,0,0,0.5);
+      transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    dialog::backdrop { background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+    
+    /* Desktop Dialog overrides */
+    @media (min-width: 600px) {
+      dialog { margin: auto; border-radius: 16px; width: 400px; padding: 24px; }
+    }
+
+    .dlgHead { font-size: 20px; font-weight: 700; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+    .dlgActions { display: flex; gap: 12px; margin-top: 24px; flex-direction: column; }
+    
+    /* Toasts */
+    .toasts { position: fixed; left: 16px; right: 16px; top: 80px; z-index: 9999; pointer-events: none; display: flex; flex-direction: column; gap: 8px; }
+    .toast { pointer-events: auto; background: var(--good); color: #000; font-weight: 600; padding: 14px 16px; border-radius: 12px; box-shadow: var(--shadow); display: flex; justify-content: space-between; align-items: center; font-size: 14px; animation: slideIn 0.3s ease-out; }
+    .toast .actions button { background: rgba(0,0,0,0.1); color: #000; min-height: 32px; padding: 4px 12px; border-radius: 6px; border: none; font-weight: 700; cursor: pointer; }
+    
+    @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+    /* Utilities */
+    .pill { background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 16px; font-size: 12px; font-weight: 600; color: var(--text); }
+    
+    /* Responsive breakpoints */
+    @media (min-width: 768px) {
+      .table-container { display: block; }
+      .monthCards { display: none; }
+      .dlgActions { flex-direction: row; justify-content: flex-end; }
+      .dlgActions .btn { width: auto; }
+      .wrap { padding-bottom: 40px; }
+      .saveBar { position: sticky; border-radius: var(--radius); border: 1px solid var(--border); bottom: 20px; }
+      body { padding-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Tracker</h1>
+    <button class="btn iconbtn" id="openMenuBtn" aria-label="Menu" style="color: var(--acc)">⚙️</button>
+  </header>
+
+  <div class="wrap">
+    <section>
+      <div class="row space-between" style="margin-bottom: 16px">
+        <h2>Add / Edit Month</h2>
+        <span class="pill" id="lastMonthPill" style="max-width: 50%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">No prior month</span>
+      </div>
+
+      <form id="entryForm" novalidate>
+        <div class="ios-group">
+          <div class="ios-field">
+            <label for="monthSel">Month</label>
+            <select id="monthSel"></select>
+          </div>
+          <div class="ios-field">
+            <label for="yearSel">Year</label>
+            <select id="yearSel"></select>
+          </div>
+        </div>
+
+        <div class="row" style="margin-bottom: 12px;">
+            <button class="btn small" id="usePrevEnd" type="button">Use Last End</button>
+            <button class="btn small" id="copyStartToEnd" type="button">Start → End</button>
+        </div>
+
+        <div class="ios-group">
+          <div class="ios-field">
+            <label for="start">Start Checking</label>
+            <input id="start" inputmode="decimal" type="text" autocomplete="off" placeholder="0.00" />
+          </div>
+          <div class="ios-field">
+            <label for="end">End Checking</label>
+            <input id="end" inputmode="decimal" type="text" autocomplete="off" placeholder="0.00" />
+          </div>
+          <div class="ios-field">
+            <label for="tOut">Transfers Out</label>
+            <input id="tOut" inputmode="decimal" type="text" autocomplete="off" placeholder="0.00" />
+          </div>
+          <div class="ios-field">
+            <label for="cc">Credit Card</label>
+            <input id="cc" inputmode="decimal" type="text" autocomplete="off" placeholder="0.00" />
+          </div>
+        </div>
+
+        <div class="errors" id="formErrors" aria-live="polite"></div>
+
+        <div class="saveBar">
+          <div style="flex: 1">
+            <div style="font-size: 11px; color: var(--muted); text-transform: uppercase; font-weight: 600;">Est. Spend</div>
+            <div id="pvSpend" style="font-size: 20px; font-weight: 700;">$0.00</div>
+          </div>
+          <button class="btn primary" type="submit" id="saveBtn" style="padding-left: 32px; padding-right: 32px;">Save</button>
+        </div>
+      </form>
+
+      <h2 style="margin-top: 32px;">Year-to-Date</h2>
+      <div class="preview" aria-label="Year summary">
+        <div class="kpi">
+          <div class="label" id="kpiSpendLabel">Total Spend</div>
+          <div class="value" id="kpiSpend">$0</div>
+        </div>
+        <div class="kpi">
+          <div class="label" id="kpiDeltaLabel">Checking Δ</div>
+          <div class="value" id="kpiDelta">$0</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Months</div>
+          <div class="value" id="kpiMonths">0</div>
+        </div>
+      </div>
+    </section>
+
+    <section style="margin-top: 32px">
+      <h2>Trends</h2>
+      <div class="chart-container" id="chartBox">
+        <div class="legend">
+          <span class="key"><span class="swatch end"></span> End Balance</span>
+          <span class="key"><span class="swatch cc"></span> CC Spend</span>
+        </div>
+        <svg id="chart" role="img" aria-label="Monthly chart"></svg>
+        <div class="hint" style="text-align: center; margin-top: 8px;">Tap points for details</div>
+      </div>
+    </section>
+
+    <section style="margin-top: 32px">
+      <div class="row space-between">
+        <h2>History</h2>
+        <div class="row">
+          <select id="filterYear" class="btn small" style="background: var(--panel); border: 1px solid var(--border); color: var(--text); -webkit-appearance: none; appearance: none; padding-right: 12px;"></select>
+          <button class="btn small" id="toggleSort" type="button">⇅ Sort</button>
+        </div>
+      </div>
+
+      <div class="monthCards" id="monthCards"></div>
+
+      <div class="table-container">
+        <table id="monthsTable">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Start</th>
+              <th>End</th>
+              <th>Δ</th>
+              <th>Transfers</th>
+              <th>Saved</th>
+              <th>Spend</th>
+              <th>CC</th>
+              <th style="text-align: center">Action</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <div class="tooltip" id="tooltip"></div>
+
+  <dialog id="settingsMenu">
+    <div class="dlgHead">
+      Settings
+      <button class="btn iconbtn" id="closeMenuBtn" style="color: var(--muted)">✕</button>
+    </div>
+    
+    <div class="ios-group" style="margin-bottom: 24px;">
+      <button class="ios-field btn" id="exportCsv" style="width: 100%; border-radius: 0; background: transparent; text-align: left; display: block; border-bottom: 1px solid var(--border);">
+        <label style="cursor: pointer; width: 100%; display: block;">📤 Export CSV</label>
+      </button>
+      <label class="ios-field btn" for="importFile" style="width: 100%; border-radius: 0; background: transparent; text-align: left; display: block; border-bottom: 1px solid var(--border); cursor: pointer;">
+        📥 Import CSV
+      </label>
+      <input id="importFile" type="file" accept=".csv" style="display:none" />
+      <button class="ios-field btn" id="openHow" style="width: 100%; border-radius: 0; background: transparent; text-align: left; display: block; border-bottom: 1px solid var(--border);">
+        <label style="cursor: pointer; width: 100%; display: block;">ℹ️ How Formulas Work</label>
+      </button>
+      <button class="ios-field btn" id="runTests" style="width: 100%; border-radius: 0; background: transparent; text-align: left; display: block;">
+        <label style="cursor: pointer; width: 100%; display: block;">🧪 Run Diagnostics</label>
+      </button>
+    </div>
+    
+    <div class="mono hint" id="testOutput" style="margin-bottom: 16px;"></div>
+
+    <button class="btn danger full" id="resetAll">Erase All Data</button>
+  </dialog>
+
+  <dialog id="howDlg">
+    <div class="dlgHead">Formulas</div>
+    <div style="color: var(--muted); font-size: 14px;">
+      <p><b>Difference</b> = End − Start</p>
+      <p><b>Transfers Out</b> is excluded from spending calculations.</p>
+      <p><b>Estimated Total Spend</b> = max((Start − End) − Transfers Out, 0) + Credit Card Spend</p>
+      <p><b>Total Saved</b> = max(End − (Start − Transfers Out), 0)</p>
+    </div>
+    <div class="dlgActions">
+      <button class="btn full" id="closeHow">Got it</button>
+    </div>
+  </dialog>
+
+  <dialog id="resetDlg">
+    <div class="dlgHead">Erase All Data?</div>
+    <div style="color: var(--muted); font-size: 14px; margin-bottom: 16px;">
+      This permanently deletes all saved months. Type <b>RESET</b> to confirm.
+    </div>
+    <div class="ios-group">
+      <div class="ios-field" style="border: none;">
+        <input id="resetType" type="text" autocomplete="off" placeholder="RESET" style="text-align: left; margin: 0; color: var(--bad);" />
+      </div>
+    </div>
+    <div class="dlgActions">
+      <button class="btn full" id="cancelReset">Cancel</button>
+      <button class="btn danger full" id="confirmReset">Erase Now</button>
+    </div>
+  </dialog>
+
+  <script>
+    const $ = (sel, el=document) => el.querySelector(sel);
+    const $$ = (sel, el=document) => Array.from(el.querySelectorAll(sel));
+
+    const storeKey = 'spend-tracker-v3';
+    const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+    function guessCurrency(){
+      try { const loc = Intl.DateTimeFormat().resolvedOptions().locale; if(loc && loc.startsWith('en-US')) return 'USD'; } catch(e){}
+      return 'USD';
+    }
+    const fmt = new Intl.NumberFormat(undefined, {style:'currency', currency: guessCurrency(), maximumFractionDigits: 2});
+
+    function pad2(n){ return String(n).padStart(2,'0'); }
+    function monthId(year, monthIndex0){ return `${year}-${pad2(monthIndex0+1)}`; }
+    function displayMonth(id){ const [y,m] = id.split('-').map(Number); return !y || !m ? id : `${monthNames[m-1]} ${y}`; }
+
+    function parseDecimal(text){
+      if(text == null) return NaN;
+      const cleaned = String(text).trim().replace(/[^0-9.-]/g,'');
+      if(cleaned === '' || cleaned === '-' || cleaned === '.' || cleaned === '-.') return NaN;
+      const n = Number(cleaned);
+      return Number.isFinite(n) ? n : NaN;
+    }
+    function clampMoney(n){ return Math.round(n * 100) / 100; }
+
+    function compute({start,end,cc,tOut}){
+      const delta = end - start;
+      const totalSaved = Math.max(end - (start - tOut), 0);
+      const outflowNet = Math.max((start - end) - tOut, 0);
+      const spend = outflowNet + cc;
+      return { delta: clampMoney(delta), totalSaved: clampMoney(totalSaved), spend: clampMoney(spend) };
+    }
+
+    function loadState(){
+      try {
+        const raw = localStorage.getItem(storeKey);
+        if(!raw) return {months:[], ui:{filterYear:'ALL', sort:'DESC'}};
+        const parsed = JSON.parse(raw);
+        return { months: Array.isArray(parsed.months) ? parsed.months : [], ui: parsed.ui || {filterYear:'ALL', sort:'DESC'} };
+      } catch(e) { return {months:[], ui:{filterYear:'ALL', sort:'DESC'}}; }
+    }
+    function saveState(){ localStorage.setItem(storeKey, JSON.stringify(state)); }
+
+    function sortMonths(arr, dir){
+      const sign = dir === 'ASC' ? 1 : -1;
+      return arr.slice().sort((a,b)=> (a.id > b.id ? 1 : a.id < b.id ? -1 : 0) * sign);
+    }
+    function uniqueYears(months){ return Array.from(new Set(months.map(m => m.id.split('-')[0]))).sort(); }
+    
+    function selectedId(){ return monthId(Number($('#yearSel').value), Number($('#monthSel').value)); }
+    function getPrevMonthForSelected(){
+      const id = selectedId();
+      const sorted = sortMonths(state.months, 'ASC');
+      const idx = sorted.findIndex(x => x.id === id);
+      return idx > 0 ? sorted[idx-1] : null;
+    }
+
+    // UI Feedback
+    function toast(message, duration=3500){
+      const host = $('#toasts');
+      const el = document.createElement('div');
+      el.className = 'toast';
+      el.innerHTML = `<div class="msg">${message}</div>`;
+      host.appendChild(el);
+      if(duration) setTimeout(() => { if(host.contains(el)) el.remove(); }, duration);
+    }
+
+    function setDialogOpen(dlg, open){
+      if(open){
+        dlg.showModal();
+        const focusable = dlg.querySelector('input:not([type="file"])');
+        if(focusable) setTimeout(() => focusable.focus(), 100);
+      } else { dlg.close(); }
+    }
+
+    // Setup Selectors
+    function buildSelectors(){
+      $('#monthSel').innerHTML = monthNames.map((n,i)=>`<option value="${i}">${n}</option>`).join('');
+      const now = new Date();
+      const baseYears = new Set();
+      for(let y = now.getFullYear()-2; y <= now.getFullYear()+2; y++) baseYears.add(String(y));
+      uniqueYears(state.months).forEach(y => baseYears.add(String(y)));
+      
+      $('#yearSel').innerHTML = Array.from(baseYears).sort().map(y=>`<option value="${y}">${y}</option>`).join('');
+      $('#monthSel').value = String(now.getMonth());
+      $('#yearSel').value = String(now.getFullYear());
+      buildFilterYear();
+    }
+
+    function buildFilterYear(){
+      const years = uniqueYears(state.months);
+      const opts = ['<option value="ALL">All Years</option>'].concat(years.map(y=>`<option value="${y}">${y}</option>`));
+      $('#filterYear').innerHTML = opts.join('');
+      $('#filterYear').value = state.ui.filterYear || 'ALL';
+    }
+
+    function filterMonths(){
+      const fy = state.ui.filterYear || 'ALL';
+      let arr = fy !== 'ALL' ? state.months.filter(m => m.id.startsWith(fy + '-')) : state.months;
+      return sortMonths(arr, state.ui.sort || 'DESC');
+    }
+
+    // Validation & State
+    function validateEntry({start,end,cc,tOut}){
+      const errs = [];
+      if(!Number.isFinite(start)) errs.push('Valid Start Checking required.');
+      if(!Number.isFinite(end)) errs.push('Valid End Checking required.');
+      if(!Number.isFinite(tOut)) errs.push('Valid Transfers Out required.');
+      if(!Number.isFinite(cc)) errs.push('Valid Credit Card Spend required.');
+      return errs;
+    }
+
+    function entryPayload(){
+      return { start: parseDecimal($('#start').value), end: parseDecimal($('#end').value), tOut: parseDecimal($('#tOut').value), cc: parseDecimal($('#cc').value) };
+    }
+
+    function setPreview(){
+      const payload = entryPayload();
+      const errs = validateEntry(payload);
+      if(errs.length){ $('#pvSpend').textContent = '—'; return; }
+      const c = compute(payload);
+      $('#pvSpend').textContent = fmt.format(c.spend);
+      
+      const prev = getPrevMonthForSelected();
+      if(prev) {
+        $('#lastMonthPill').textContent = `Prev End: ${fmt.format(prev.end)}`;
+      } else {
+        $('#lastMonthPill').textContent = 'No prior month';
+      }
+    }
+
+    // Render Data Lists
+    function renderMonths(){
+      const months = filterMonths();
+      const tbody = $('#monthsTable tbody');
+      const cards = $('#monthCards');
+      tbody.innerHTML = ''; cards.innerHTML = '';
+
+      let totSpend=0, totDelta=0;
+      
+      for(const m of months){
+        const c = compute(m);
+        totSpend += c.spend;
+        totDelta += (m.end - m.start);
+
+        // Mobile Cards
+        const card = document.createElement('div');
+        card.className = 'monthCard';
+        card.innerHTML = `
+          <div class="monthCardHeader">
+            <div>
+              <div class="monthCardTitle">${displayMonth(m.id)}</div>
+              <div class="monthCardMeta">Start: ${fmt.format(m.start)} · End: ${fmt.format(m.end)}</div>
+            </div>
+            <button class="btn iconbtn danger" aria-label="Delete" data-act="del" data-id="${m.id}">🗑️</button>
+          </div>
+          <div class="monthCardGrid" style="cursor:pointer" data-act="edit" data-id="${m.id}">
+            <div class="kv"><div class="k">Spend</div><div class="v" style="color:var(--text)">${fmt.format(c.spend)}</div></div>
+            <div class="kv"><div class="k">Saved</div><div class="v" style="color:var(--good)">${fmt.format(c.totalSaved)}</div></div>
+            <div class="kv"><div class="k">CC Spend</div><div class="v">${fmt.format(m.cc)}</div></div>
+            <div class="kv"><div class="k">Difference</div><div class="v ${c.delta < 0 ? 'bad' : 'good'}">${fmt.format(c.delta)}</div></div>
+          </div>
+        `;
+        cards.appendChild(card);
+
+        // Desktop Table
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><b>${displayMonth(m.id)}</b></td>
+          <td>${fmt.format(m.start)}</td>
+          <td>${fmt.format(m.end)}</td>
+          <td class="${c.delta < 0 ? 'bad' : 'good'}">${fmt.format(c.delta)}</td>
+          <td>${fmt.format(m.tOut)}</td>
+          <td style="color:var(--good)">${fmt.format(c.totalSaved)}</td>
+          <td style="font-weight:700">${fmt.format(c.spend)}</td>
+          <td>${fmt.format(m.cc)}</td>
+          <td style="text-align:center">
+            <button class="btn iconbtn" data-act="edit" data-id="${m.id}">✏️</button>
+            <button class="btn iconbtn danger" data-act="del" data-id="${m.id}">🗑️</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      // Update YTD / KPIs
+      $('#kpiSpend').textContent = fmt.format(clampMoney(totSpend));
+      $('#kpiDelta').textContent = fmt.format(clampMoney(totDelta));
+      $('#kpiMonths').textContent = String(months.length);
+    }
+
+    // Chart logic (Responsive)
+    let chartPinned = null;
+    function renderChart(){
+      const svg = $('#chart');
+      const box = $('#chartBox');
+      const months = filterMonths().slice().reverse();
+      
+      // Responsive width measurement
+      const W = box.clientWidth || window.innerWidth - 32; 
+      const H = 240; // Fixed touch-friendly height
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      svg.innerHTML = '';
+
+      if(months.length === 0){
+        svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="var(--muted)" font-size="14">No data available to chart.</text>`;
+        return;
+      }
+
+      const padL = 40, padR = 40, padT = 20, padB = 30;
+      const innerW = W - padL - padR;
+      const innerH = H - padT - padB;
+
+      const ends = months.map(m=>m.end);
+      const ccs  = months.map(m=>m.cc);
+
+      const endMin = Math.min(...ends, 0);
+      const endMax = Math.max(...ends, 100);
+      const ccMax  = Math.max(...ccs, 10);
+
+      const x = i => padL + (months.length===1 ? innerW/2 : (i/(months.length-1))*innerW);
+      const yEnd = v => padT + innerH - ((v - endMin) / (endMax - endMin || 1)) * innerH;
+      const yCC = v => padT + innerH - (v / ccMax) * innerH;
+
+      const make = (tag, attrs) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        for(const [k,v] of Object.entries(attrs)) el.setAttribute(k, v);
+        return el;
+      };
+
+      // Gridlines
+      svg.appendChild(make('line',{x1:padL,y1:padT+innerH,x2:padL+innerW,y2:padT+innerH, stroke:'var(--border)'}));
+      svg.appendChild(make('line',{x1:padL,y1:padT,x2:padL,y2:padT+innerH, stroke:'var(--border)'}));
+      
+      // Paths
+      const pathFor = (arr, fn) => arr.map((v,i)=>`${i===0?'M':'L'} ${x(i)} ${fn(v)}`).join(' ');
+      svg.appendChild(make('path',{ d: pathFor(ends, yEnd), fill:'none', stroke:'var(--acc)', 'stroke-width':'3' }));
+      svg.appendChild(make('path',{ d: pathFor(ccs, yCC), fill:'none', stroke:'var(--warn)', 'stroke-width':'3' }));
+
+      // Points & Touch Targets
+      months.forEach((m,i)=>{
+        const ex = x(i), ey = yEnd(m.end), cy = yCC(m.cc);
+        svg.appendChild(make('circle',{cx:ex, cy:ey, r:5, fill:'var(--acc)'}));
+        svg.appendChild(make('circle',{cx:ex, cy:cy, r:5, fill:'var(--warn)'}));
+
+        // Large invisible hit target for mobile fingers (r:24)
+        const hit = make('circle',{cx:ex, cy:padT+innerH/2, r:24, fill:'transparent'});
+        const triggerTooltip = (ev) => {
+          ev.preventDefault();
+          const comp = compute(m);
+          showTooltip(ev.clientX, ev.clientY, {...m, ...comp});
+        };
+        hit.addEventListener('pointerdown', triggerTooltip);
+        svg.appendChild(hit);
+      });
+
+      // Tap off to close
+      svg.addEventListener('pointerdown', (ev)=>{
+        if (ev.target.tagName !== 'circle') hideTooltip();
+      });
+    }
+
+    function showTooltip(x, y, data){
+      const t = $('#tooltip');
+      t.classList.add('show');
+      
+      t.innerHTML = `
+        <div class="t">${displayMonth(data.id)}</div>
+        <div class="l">End: <span class="mono">${fmt.format(data.end)}</span></div>
+        <div class="l">CC: <span class="mono">${fmt.format(data.cc)}</span></div>
+        <div class="l">Spend: <span class="mono" style="font-weight:bold; color:var(--text)">${fmt.format(data.spend)}</span></div>
+      `;
+      
+      // Smart positioning: Keep inside viewport
+      let newX = x + 15;
+      let newY = y + 15;
+      const rect = t.getBoundingClientRect();
+      
+      if(newX + rect.width > window.innerWidth - 10) newX = window.innerWidth - rect.width - 10;
+      if(newY + rect.height > window.innerHeight - 10) newY = window.innerHeight - rect.height - 10;
+      
+      t.style.left = newX + 'px';
+      t.style.top = newY + 'px';
+    }
+    function hideTooltip(){ $('#tooltip').classList.remove('show'); }
+
+    // Resize handler
+    let resizeTimer;
+    window.addEventListener('resize', ()=>{
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(()=> renderChart(), 250);
+      hideTooltip();
+    });
+
+    // Actions
+    function loadIntoForm(id){
+      const m = state.months.find(x=>x.id===id);
+      if(!m) return;
+      const [y, mm] = m.id.split('-');
+      $('#yearSel').value = String(Number(y));
+      $('#monthSel').value = String(Number(mm)-1);
+      $('#start').value = String(m.start.toFixed(2));
+      $('#end').value = String(m.end.toFixed(2));
+      $('#tOut').value = String(m.tOut.toFixed(2));
+      $('#cc').value = String(m.cc.toFixed(2));
+      window.scrollTo({top: 0, behavior: 'smooth'});
+      setPreview();
+    }
+
+    function wire(){
+      ['start','end','tOut','cc'].forEach(id=>{
+        $('#'+id).addEventListener('input', setPreview);
+        // Default to empty strings for placeholders to show
+        if(!$('#'+id).value) $('#'+id).value = ''; 
+      });
+
+      $('#monthSel').addEventListener('change', setPreview);
+      $('#yearSel').addEventListener('change', setPreview);
+
+      $('#usePrevEnd').addEventListener('click', ()=>{
+        const prev = getPrevMonthForSelected();
+        if(!prev) return toast('No prior month found.');
+        $('#start').value = prev.end.toFixed(2);
+        setPreview();
+      });
+      
+      $('#copyStartToEnd').addEventListener('click', ()=>{
+        const s = parseDecimal($('#start').value);
+        if(Number.isFinite(s)) { $('#end').value = s.toFixed(2); setPreview(); }
+      });
+
+      $('#entryForm').addEventListener('submit', (ev)=>{
+        ev.preventDefault();
+        const payload = entryPayload();
+        const errs = validateEntry(payload);
+        const errHost = $('#formErrors');
+        
+        if(errs.length){
+          errHost.classList.add('show');
+          errHost.innerHTML = errs.map(e=>`<div class="err">${e}</div>`).join('');
+          return;
+        }
+        
+        errHost.classList.remove('show');
+        const id = selectedId();
+        
+        const idx = state.months.findIndex(m => m.id === id);
+        if(idx >= 0) state.months[idx] = {id, ...payload};
+        else state.months.push({id, ...payload});
+        
+        saveState();
+        renderAll();
+        
+        // Reset form for next entry
+        $('#start').value=''; $('#end').value=''; $('#cc').value=''; $('#tOut').value='';
+        toast('Month saved successfully.');
+      });
+
+      // Filter & Sorting
+      $('#filterYear').addEventListener('change', (e)=>{
+        state.ui.filterYear = e.target.value;
+        saveState(); renderAll();
+      });
+      $('#toggleSort').addEventListener('click', ()=>{
+        state.ui.sort = state.ui.sort === 'ASC' ? 'DESC' : 'ASC';
+        saveState(); renderAll();
+      });
+
+      // History Actions
+      const handleAction = (ev)=>{
+        const btn = ev.target.closest('[data-act]');
+        if(!btn) return;
+        const id = btn.getAttribute('data-id');
+        const act = btn.getAttribute('data-act');
+        
+        if(act === 'edit') loadIntoForm(id);
+        if(act === 'del') {
+          if(confirm(`Delete ${displayMonth(id)}?`)){
+            state.months = state.months.filter(x=>x.id!==id);
+            saveState(); renderAll();
+            toast('Month deleted.');
+          }
+        }
+      };
+      $('#monthsTable').addEventListener('click', handleAction);
+      $('#monthCards').addEventListener('click', handleAction);
+
+      // Dialogs
+      $('#openMenuBtn').addEventListener('click', () => setDialogOpen($('#settingsMenu'), true));
+      $('#closeMenuBtn').addEventListener('click', () => setDialogOpen($('#settingsMenu'), false));
+      
+      $('#openHow').addEventListener('click', () => { setDialogOpen($('#settingsMenu'), false); setDialogOpen($('#howDlg'), true); });
+      $('#closeHow').addEventListener('click', () => setDialogOpen($('#howDlg'), false));
+
+      $('#resetAll').addEventListener('click', () => {
+        setDialogOpen($('#settingsMenu'), false);
+        $('#resetType').value = '';
+        setDialogOpen($('#resetDlg'), true);
+      });
+      $('#cancelReset').addEventListener('click', () => setDialogOpen($('#resetDlg'), false));
+      $('#confirmReset').addEventListener('click', () => {
+        if($('#resetType').value !== 'RESET') return toast('Type RESET exactly to confirm.');
+        state.months = [];
+        saveState(); renderAll();
+        setDialogOpen($('#resetDlg'), false);
+        toast('All data erased.');
+      });
+
+      // Export / Import logic remains intact
+      $('#exportCsv').addEventListener('click', ()=>{
+        setDialogOpen($('#settingsMenu'), false);
+        const rows = [['month','start','end','cc','tOut'].join(',')];
+        sortMonths(state.months, 'ASC').forEach(m => {
+          rows.push([m.id, m.start.toFixed(2), m.end.toFixed(2), m.cc.toFixed(2), m.tOut.toFixed(2)].join(','));
+        });
+        const blob = new Blob([rows.join('\n')], {type:'text/plain;charset=utf-8'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `spending-tracker.csv`;
+        document.body.appendChild(a); a.click(); a.remove();
+      });
+
+      $('#importFile').addEventListener('change', async (ev)=>{
+        setDialogOpen($('#settingsMenu'), false);
+        const f = ev.target.files && ev.target.files[0];
+        if(!f) return;
+        const text = await f.text();
+        const lines = text.split('\n').filter(l=>l.trim().length);
+        if(lines.length > 1) {
+            let imported = 0;
+            for(let i=1; i<lines.length; i++){
+                const cols = lines[i].split(',').map(s=>s.replace(/"/g,'').trim());
+                if(cols.length>=5 && /^\d{4}-\d{2}$/.test(cols[0])){
+                    const payload = { start: parseDecimal(cols[1]), end: parseDecimal(cols[2]), cc: parseDecimal(cols[3]), tOut: parseDecimal(cols[4]) };
+                    if(!validateEntry(payload).length) {
+                        const idx = state.months.findIndex(x=>x.id===cols[0]);
+                        if(idx>=0) state.months[idx] = {id:cols[0], ...payload};
+                        else state.months.push({id:cols[0], ...payload});
+                        imported++;
+                    }
+                }
+            }
+            saveState(); renderAll();
+            toast(`Imported ${imported} months.`);
+        }
+        ev.target.value = '';
+      });
+
+      $('#runTests').addEventListener('click', ()=>{
+        const out = [];
+        try { out.push(displayMonth('2025-01') === 'January 2025' ? '✅ Dates format correctly' : '❌ Dates failed'); } catch(e){}
+        try { const c = compute({start:100, end:80, cc:20, tOut:0}); out.push(c.spend === 40 ? '✅ Calculations accurate' : '❌ Calculations failed'); } catch(e){}
+        $('#testOutput').innerHTML = out.join('<br>');
+      });
+    }
+
+    function renderAll(){
+      buildFilterYear();
+      renderMonths();
+      renderChart();
+      setPreview();
+    }
+
+    // Initialization
+    let state = loadState();
+    buildSelectors();
+    wire();
+    renderAll();
+  </script>
+</body>
+</html>
