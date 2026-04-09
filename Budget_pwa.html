@@ -209,7 +209,7 @@
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin: 0 4px 14px;
+      margin: 0 4px 10px;
       justify-content: center;
     }
     .chart-preset {
@@ -217,8 +217,8 @@
       background: var(--panel2);
       color: var(--text);
       border-radius: 10px;
-      min-height: 38px;
-      padding: 8px 10px;
+      min-height: 34px;
+      padding: 5px 10px;
       font-size: 12px;
       font-weight: 600;
       white-space: nowrap;
@@ -229,6 +229,58 @@
       background: var(--acc);
       color: #fff;
       border-color: transparent;
+    }
+    .monthPickerWrap {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      margin: 0 4px 10px;
+    }
+    .monthPickerWrap.show { display: flex; }
+    .monthPickerWrap label { font-size: 12px; color: var(--muted); margin-right: 8px; }
+    .monthPickerWrap input {
+      background: var(--panel2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      min-height: 36px;
+      padding: 6px 10px;
+      font-size: 14px;
+      max-width: 180px;
+    }
+    .inlineEditor {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px dashed var(--border);
+    }
+    .inlineGrid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .inlineField label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: .2px;
+    }
+    .inlineField input {
+      width: 100%;
+      background: var(--panel2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      min-height: 36px;
+      padding: 6px 8px;
+      font-size: 15px;
+    }
+    .inlineActions {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      justify-content: flex-end;
     }
     
     .tooltip {
@@ -387,6 +439,10 @@
           <button class="chart-preset" type="button" data-range="QTR">Quarter</button>
           <button class="chart-preset" type="button" data-range="MON">Month</button>
         </div>
+        <div class="monthPickerWrap" id="monthPickerWrap">
+          <label for="trendMonthSel">View month</label>
+          <input id="trendMonthSel" type="month" />
+        </div>
         <div class="legend">
           <span class="key"><span class="swatch end"></span> End Balance</span>
           <span class="key"><span class="swatch cc"></span> CC Spend</span>
@@ -540,22 +596,29 @@
     function loadState(){
       try {
         const raw = localStorage.getItem(storeKey);
-        if(!raw) return {months:[], ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12'}};
+        const defaultUi = {filterYear:'ALL', sort:'DESC', chartRange:'L12', chartMonth:''};
+        if(!raw) return {months:[], ui:defaultUi};
         const parsed = JSON.parse(raw);
         const months = Array.isArray(parsed.months)
           ? parsed.months
               .map(normalizeMonthRecord)
               .filter(m => /^\d{4}-\d{2}$/.test(m.id) && Number.isFinite(m.start) && Number.isFinite(m.end))
           : [];
-        const fallbackUi = {filterYear:'ALL', sort:'DESC', chartRange:'L12'};
-        return { months, ui: {...fallbackUi, ...(parsed.ui || {})} };
-      } catch(e) { return {months:[], ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12'}}; }
+        return { months, ui: {...defaultUi, ...(parsed.ui || {})} };
+      } catch(e) { return {months:[], ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12', chartMonth:''}}; }
     }
     function saveState(){ localStorage.setItem(storeKey, JSON.stringify(state)); }
 
     function sortMonths(arr, dir){
       const sign = dir === 'ASC' ? 1 : -1;
       return arr.slice().sort((a,b)=> (a.id > b.id ? 1 : a.id < b.id ? -1 : 0) * sign);
+    }
+    function isValidMonthId(id){ return /^\d{4}-\d{2}$/.test(String(id || '')); }
+    function getDefaultTrendMonth(){
+      const sorted = sortMonths(state.months, 'ASC');
+      if(sorted.length) return sorted[sorted.length - 1].id;
+      const now = new Date();
+      return monthId(now.getFullYear(), now.getMonth());
     }
     function uniqueYears(months){ return Array.from(new Set(months.map(m => m.id.split('-')[0]))).sort(); }
     
@@ -621,7 +684,13 @@
       const latestYear = Number(latest.id.slice(0,4));
       const latestMonth = Number(latest.id.slice(5,7));
 
-      if(range === 'MON') return sorted.slice(-1);
+      if(range === 'MON'){
+        const selected = isValidMonthId(state.ui.chartMonth) ? state.ui.chartMonth : getDefaultTrendMonth();
+        const exact = sorted.find(m => m.id === selected);
+        if(exact) return [exact];
+        const fallback = sorted.filter(m => m.id <= selected);
+        return fallback.length ? [fallback[fallback.length - 1]] : [latest];
+      }
       if(range === 'QTR') return sorted.slice(-3);
       if(range === 'L6') return sorted.slice(-6);
       if(range === 'L12') return sorted.slice(-12);
@@ -650,6 +719,8 @@
       $$('.chart-preset').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.range === range);
       });
+      const monthWrap = $('#monthPickerWrap');
+      monthWrap.classList.toggle('show', range === 'MON');
       $('#kpiSpendLabel').textContent = `Total Spend (${getRangeLabel(range)})`;
       $('#kpiDeltaLabel').textContent = `Total Saved (${getRangeLabel(range)})`;
     }
@@ -690,9 +761,12 @@
       if(Number.isFinite(n)) el.value = fmt.format(clampMoney(n));
     }
 
-    function unformatInputMoney(el){
+    function unformatInputMoney(el, allowEmpty=false){
       const n = parseDecimal(el.value);
-      if(Number.isFinite(n)) el.value = n.toFixed(2);
+      if(Number.isFinite(n)){
+        if(allowEmpty && n === 0) el.value = '';
+        else el.value = String(clampMoney(n));
+      }
     }
 
     function setPreview(){
@@ -722,6 +796,7 @@
       
       for(const m of months){
         const c = compute(m);
+        const isInlineEditing = inlineEditingId === m.id;
 
         // Mobile Cards
         const card = document.createElement('div');
@@ -734,7 +809,7 @@
               <div style="color:var(--good); font-size:16px; font-weight:600; margin-top:4px;">Saved: ${fmt.format(c.totalSaved)}</div>
             </div>
             <div class="row" style="gap:6px;">
-              <button class="btn iconbtn" aria-label="Edit" data-act="edit" data-id="${m.id}">✏️</button>
+              <button class="btn iconbtn" aria-label="Edit" data-act="inline-edit" data-id="${m.id}">✏️</button>
               <button class="btn iconbtn danger" aria-label="Delete" data-act="del" data-id="${m.id}">🗑️</button>
             </div>
           </div>
@@ -744,6 +819,7 @@
             <div class="kv"><div class="k">Transfers Out</div><div class="v">${fmt.format(m.tOut)}</div></div>
             <div class="kv"><div class="k">Difference</div><div class="v ${c.delta < 0 ? 'bad' : 'good'}">${fmt.format(c.delta)}</div></div>
           </div>
+          ${isInlineEditing ? inlineEditorMarkup(m) : ''}
         `;
         cards.appendChild(card);
 
@@ -759,11 +835,16 @@
           <td style="font-weight:700">${fmt.format(c.spend)}</td>
           <td>${fmt.format(m.cc)}</td>
           <td style="text-align:center">
-            <button class="btn iconbtn" data-act="edit" data-id="${m.id}">✏️</button>
+            <button class="btn iconbtn" data-act="inline-edit" data-id="${m.id}">✏️</button>
             <button class="btn iconbtn danger" data-act="del" data-id="${m.id}">🗑️</button>
           </td>
         `;
         tbody.appendChild(tr);
+        if(isInlineEditing){
+          const editTr = document.createElement('tr');
+          editTr.innerHTML = `<td colspan="9">${inlineEditorMarkup(m)}</td>`;
+          tbody.appendChild(editTr);
+        }
       }
 
       // Update YTD / KPIs from active chart range
@@ -775,6 +856,35 @@
       $('#kpiSpend').textContent = fmt.format(clampMoney(totSpend));
       $('#kpiDelta').textContent = fmt.format(clampMoney(totSaved));
       $('#kpiMonths').textContent = String(kpiMonths.length);
+    }
+
+    function inlineEditorMarkup(m){
+      return `
+        <div class="inlineEditor" data-inline-editor data-id="${m.id}">
+          <div class="inlineGrid">
+            <div class="inlineField">
+              <label>Start</label>
+              <input inputmode="decimal" type="text" data-field="start" value="${m.start.toFixed(2)}" />
+            </div>
+            <div class="inlineField">
+              <label>End</label>
+              <input inputmode="decimal" type="text" data-field="end" value="${m.end.toFixed(2)}" />
+            </div>
+            <div class="inlineField">
+              <label>Transfers Out</label>
+              <input inputmode="decimal" type="text" data-field="tOut" value="${m.tOut === 0 ? '' : m.tOut.toFixed(2)}" placeholder="optional" />
+            </div>
+            <div class="inlineField">
+              <label>Credit Card</label>
+              <input inputmode="decimal" type="text" data-field="cc" value="${m.cc === 0 ? '' : m.cc.toFixed(2)}" placeholder="optional" />
+            </div>
+          </div>
+          <div class="inlineActions">
+            <button class="btn small" type="button" data-act="inline-cancel" data-id="${m.id}">Cancel</button>
+            <button class="btn small primary" type="button" data-act="inline-save" data-id="${m.id}">Save</button>
+          </div>
+        </div>
+      `;
     }
 
     // Chart logic (Responsive)
@@ -816,7 +926,7 @@
         const y = Number(id.slice(0,4));
         const m = Number(id.slice(5,7));
         const d = new Date(y, m - 1, 1);
-        return (range === '5Y' || range === 'L12' || range === 'YTD') ? monthFmtLong.format(d) : monthFmtShort.format(d);
+        return (range === '5Y' || range === 'L12' || range === 'YTD' || range === 'MON') ? monthFmtLong.format(d) : monthFmtShort.format(d);
       };
 
       const make = (tag, attrs) => {
@@ -936,9 +1046,25 @@
     }
 
     let editingId = null;
+    let inlineEditingId = null;
     function setEditingState(id){
       editingId = id || null;
       $('#saveBtn').textContent = editingId ? 'Update' : 'Save';
+    }
+    function setInlineEditingState(id){
+      inlineEditingId = id || null;
+    }
+    function syncTrendMonthInput(){
+      if(!isValidMonthId(state.ui.chartMonth)) state.ui.chartMonth = getDefaultTrendMonth();
+      $('#trendMonthSel').value = state.ui.chartMonth;
+    }
+    function readInlinePayload(editorEl){
+      return {
+        start: parseDecimal($('[data-field="start"]', editorEl)?.value),
+        end: parseDecimal($('[data-field="end"]', editorEl)?.value),
+        tOut: parseOptionalMoney($('[data-field="tOut"]', editorEl)?.value),
+        cc: parseOptionalMoney($('[data-field="cc"]', editorEl)?.value)
+      };
     }
 
     function wire(){
@@ -946,7 +1072,10 @@
         const input = $('#'+id);
         const isOptional = id === 'tOut' || id === 'cc';
         input.addEventListener('input', setPreview);
-        input.addEventListener('focus', ()=>unformatInputMoney(input));
+        input.addEventListener('focus', ()=>{
+          unformatInputMoney(input, isOptional);
+          requestAnimationFrame(()=>input.select());
+        });
         input.addEventListener('blur', ()=>{
           formatInputMoney(input, isOptional);
           setPreview();
@@ -1015,6 +1144,15 @@
         const btn = ev.target.closest('[data-range]');
         if(!btn) return;
         state.ui.chartRange = btn.dataset.range;
+        if(state.ui.chartRange === 'MON' && !isValidMonthId(state.ui.chartMonth)){
+          state.ui.chartMonth = getDefaultTrendMonth();
+        }
+        saveState(); renderAll();
+      });
+      $('#trendMonthSel').addEventListener('change', (ev)=>{
+        const v = String(ev.target.value || '').trim();
+        if(!isValidMonthId(v)) return;
+        state.ui.chartMonth = v;
         saveState(); renderAll();
       });
 
@@ -1025,9 +1163,30 @@
         const id = btn.getAttribute('data-id');
         const act = btn.getAttribute('data-act');
         
-        if(act === 'edit') {
-          setEditingState(id);
-          loadIntoForm(id);
+        if(act === 'inline-edit') {
+          setEditingState(null);
+          setInlineEditingState(inlineEditingId === id ? null : id);
+          renderAll();
+        }
+        if(act === 'inline-cancel'){
+          setInlineEditingState(null);
+          renderAll();
+        }
+        if(act === 'inline-save'){
+          const editor = btn.closest('[data-inline-editor]');
+          if(!editor) return;
+          const payload = readInlinePayload(editor);
+          const errs = validateEntry(payload);
+          if(errs.length){
+            toast(errs[0]);
+            return;
+          }
+          const idx = state.months.findIndex(m => m.id === id);
+          if(idx < 0) return;
+          state.months[idx] = {id, ...payload};
+          setInlineEditingState(null);
+          saveState(); renderAll();
+          toast('Month updated.');
         }
         if(act === 'del') {
           if(confirm(`Delete ${displayMonth(id)}?`)){
@@ -1110,8 +1269,10 @@
     }
 
     function renderAll(){
+      if(!isValidMonthId(state.ui.chartMonth)) state.ui.chartMonth = getDefaultTrendMonth();
       buildFilterYear();
       updatePresetButtons();
+      syncTrendMonthInput();
       renderMonths();
       renderChart();
       setPreview();
