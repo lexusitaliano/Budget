@@ -212,6 +212,34 @@
       margin: 0 4px 10px;
       justify-content: center;
     }
+    .chart-type-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      margin: 0 auto 10px;
+      padding: 4px;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      width: fit-content;
+      max-width: 100%;
+    }
+    .chart-type-btn {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 999px;
+      min-height: 32px;
+      padding: 0 12px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .chart-type-btn.active {
+      background: var(--acc);
+      color: #fff;
+    }
     .chart-preset {
       border: 1px solid var(--border);
       background: var(--panel2);
@@ -498,6 +526,10 @@
           <button class="chart-preset" type="button" data-range="QTR">Quarter</button>
           <button class="chart-preset" type="button" data-range="MON">Month</button>
         </div>
+        <div class="chart-type-toggle" id="chartTypeToggle" role="group" aria-label="Chart display type">
+          <button class="chart-type-btn" type="button" data-chart-type="LINE">Line Chart</button>
+          <button class="chart-type-btn" type="button" data-chart-type="BARLINE">Bar-Line Chart</button>
+        </div>
         <div class="monthPickerWrap" id="monthPickerWrap">
           <label for="trendMonthSel">View month</label>
           <input id="trendMonthSel" type="month" />
@@ -709,7 +741,8 @@
           comparePrimaryYear:'',
           compareSecondaryYear:'',
           comparePrimaryQuarter:'',
-          compareSecondaryQuarter:''
+          compareSecondaryQuarter:'',
+          chartType:'LINE'
         };
         if(!raw) return {months:[], ui:defaultUi};
         const parsed = JSON.parse(raw);
@@ -722,7 +755,7 @@
       } catch(e) {
         return {
           months:[],
-          ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12', chartMonth:'', compareOn:false}
+          ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12', chartMonth:'', compareOn:false, chartType:'LINE'}
         };
       }
     }
@@ -913,6 +946,10 @@
       const range = state.ui.chartRange || 'L12';
       $$('.chart-preset').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.range === range);
+      });
+      const chartType = state.ui.chartType === 'BARLINE' ? 'BARLINE' : 'LINE';
+      $$('.chart-type-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.chartType === chartType);
       });
       const monthWrap = $('#monthPickerWrap');
       monthWrap.classList.toggle('show', range === 'MON');
@@ -1221,7 +1258,7 @@
         return;
       }
 
-      const padL = 44, padR = 44, padT = 24, padB = 44;
+      const padL = 44, padR = 44, padT = 24, padB = 56;
       const innerW = W - padL - padR;
       const innerH = H - padT - padB;
 
@@ -1299,6 +1336,7 @@
       const x = i => padL + (months.length===1 ? innerW/2 : (i/(months.length-1))*innerW);
       const yEnd = v => padT + innerH - ((v - endMin) / (endMax - endMin || 1)) * innerH;
       const yCC = v => padT + innerH - (v / ccMax) * innerH;
+      const chartType = state.ui.chartType === 'BARLINE' ? 'BARLINE' : 'LINE';
       const range = state.ui.chartRange || 'L12';
       const monthFmtShort = new Intl.DateTimeFormat('en-US', {month:'short'});
       const monthFmtLong = new Intl.DateTimeFormat('en-US', {month:'short', year:'numeric'});
@@ -1334,20 +1372,42 @@
       svg.appendChild(make('text',{x: padL, y: 14, fill:'var(--acc)', 'font-size':'10'})).textContent = 'Ending Balance (USD)';
       svg.appendChild(make('text',{x: padL + innerW, y: 14, fill:'var(--warn)', 'text-anchor':'end', 'font-size':'10'})).textContent = 'Credit Card Spend (USD)';
       
-      // Paths
+      // Paths / bars
       const pathFor = (arr, fn) => arr.map((v,i)=>`${i===0?'M':'L'} ${x(i)} ${fn(v)}`).join(' ');
       svg.appendChild(make('path',{ d: pathFor(ends, yEnd), fill:'none', stroke:'var(--acc)', 'stroke-width':'3' }));
-      svg.appendChild(make('path',{ d: pathFor(ccs, yCC), fill:'none', stroke:'var(--warn)', 'stroke-width':'3' }));
+      if(chartType === 'BARLINE'){
+        const slot = months.length === 1 ? innerW * 0.3 : innerW / months.length;
+        const barW = Math.max(6, Math.min(18, slot * 0.55));
+        ccs.forEach((val, i) => {
+          const barHeight = Math.max((val / (ccMax || 1)) * innerH, 0);
+          const left = x(i) - barW / 2;
+          const top = padT + innerH - barHeight;
+          svg.appendChild(make('rect',{
+            x: left,
+            y: top,
+            width: barW,
+            height: Math.max(0, barHeight),
+            rx: 3,
+            fill: 'var(--warn)',
+            opacity: '0.85'
+          }));
+        });
+      } else {
+        svg.appendChild(make('path',{ d: pathFor(ccs, yCC), fill:'none', stroke:'var(--warn)', 'stroke-width':'3' }));
+      }
 
       // X-axis labels (skip labels when needed for readability on mobile widths)
       const maxLabels = W < 380 ? 4 : W < 520 ? 6 : 10;
       const step = Math.max(1, Math.ceil(months.length / maxLabels));
+      const axisLabelY = padT + innerH + 24;
       months.forEach((m, i) => {
         if(months.length > 1 && i % step !== 0 && i !== months.length - 1) return;
+        const isFirst = i === 0;
+        const isLast = i === months.length - 1;
         const text = make('text',{
           x: x(i),
-          y: padT + innerH + 16,
-          'text-anchor':'middle',
+          y: axisLabelY,
+          'text-anchor': isFirst ? 'start' : isLast ? 'end' : 'middle',
           fill:'var(--muted)',
           'font-size':'10'
         });
@@ -1359,7 +1419,11 @@
       months.forEach((m,i)=>{
         const ex = x(i), ey = yEnd(m.end), cy = yCC(m.cc);
         svg.appendChild(make('circle',{cx:ex, cy:ey, r:5, fill:'var(--acc)'}));
-        svg.appendChild(make('circle',{cx:ex, cy:cy, r:5, fill:'var(--warn)'}));
+        if(chartType === 'LINE'){
+          svg.appendChild(make('circle',{cx:ex, cy:cy, r:5, fill:'var(--warn)'}));
+        } else {
+          svg.appendChild(make('circle',{cx:ex, cy:cy, r:4, fill:'var(--warn)'}));
+        }
 
         // Large invisible hit target for mobile fingers (r:24)
         const hit = make('circle',{cx:ex, cy:padT+innerH/2, r:24, fill:'transparent'});
@@ -1378,7 +1442,7 @@
       });
       legend.innerHTML = `
         <span class="key"><span class="swatch end"></span> End Balance</span>
-        <span class="key"><span class="swatch cc"></span> CC Spend</span>
+        <span class="key"><span class="swatch cc" style="${chartType === 'BARLINE' ? 'border-radius:2px;' : ''}"></span> CC Spend</span>
       `;
       compareMsgEl.textContent = comparePayload?.message || '';
       $('#chartHint').textContent = 'Tap points for details';
@@ -1544,6 +1608,14 @@
         }
         if(!compareEligibleRange(state.ui.chartRange)) state.ui.compareOn = false;
         clampCompareState();
+        saveState(); renderAll();
+      });
+      $('#chartTypeToggle').addEventListener('click', (ev)=>{
+        const btn = ev.target.closest('[data-chart-type]');
+        if(!btn) return;
+        const nextType = btn.dataset.chartType === 'BARLINE' ? 'BARLINE' : 'LINE';
+        if(state.ui.chartType === nextType) return;
+        state.ui.chartType = nextType;
         saveState(); renderAll();
       });
       $('#trendMonthSel').addEventListener('change', (ev)=>{
@@ -1724,6 +1796,7 @@
 
     function renderAll(){
       if(!isValidMonthId(state.ui.chartMonth)) state.ui.chartMonth = getDefaultTrendMonth();
+      if(state.ui.chartType !== 'BARLINE') state.ui.chartType = 'LINE';
       clampCompareState();
       buildFilterYear();
       updatePresetButtons();
