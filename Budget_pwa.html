@@ -418,7 +418,7 @@
       background: rgba(0, 0, 0, 0.92);
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
-      padding: max(10px, env(safe-area-inset-top, 0px)) 0 max(10px, env(safe-area-inset-bottom, 0px));
+      padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px);
       display: flex;
       flex-direction: column;
     }
@@ -435,38 +435,41 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 0 12px 10px;
+      padding: 8px 10px 0;
+      min-height: 0;
     }
     .chart-fs-head h3 {
       margin: 0;
-      font-size: 16px;
-      font-weight: 700;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
     }
     .chart-fs-close {
-      min-height: 42px;
-      min-width: 72px;
+      min-height: 40px;
+      min-width: 64px;
       border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--panel2);
+      border-radius: 999px;
+      background: rgba(44, 44, 46, 0.92);
       color: var(--text);
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 700;
-      padding: 8px 12px;
+      padding: 8px 14px;
     }
     .chart-fs-content {
       flex: 1;
       background: var(--panel);
       border-top: 1px solid var(--border);
       border-bottom: 1px solid var(--border);
-      padding: 10px 0 4px;
+      padding: 4px 0 2px;
       display: flex;
       flex-direction: column;
       min-height: 0;
     }
     .chart-fs-canvas-wrap {
       flex: 1;
-      min-height: 280px;
-      max-height: 72dvh;
+      min-height: 0;
       padding: 0 6px;
     }
     #chartFullscreen {
@@ -492,6 +495,26 @@
       overflow: hidden;
       position: fixed;
       width: 100%;
+    }
+    @media (orientation: landscape) and (max-height: 500px) {
+      .chart-fs-head {
+        position: absolute;
+        top: env(safe-area-inset-top, 0px);
+        left: 0;
+        right: 0;
+        z-index: 2;
+        justify-content: flex-end;
+        padding: 6px 8px 0;
+        pointer-events: none;
+      }
+      .chart-fs-head h3 { display: none; }
+      .chart-fs-head .chart-fs-close { pointer-events: auto; }
+      .chart-fs-content {
+        border-top: none;
+        padding-top: 2px;
+      }
+      .chart-fs-content .legend { margin-bottom: 6px; font-size: 11px; gap: 10px; }
+      .chart-fs-hint { display: none; }
     }
 
     /* Native-style Bottom Sheet Dialogs */
@@ -777,7 +800,7 @@
       <p><b>Difference</b> = End − Start</p>
       <p><b>Transfers Out</b> is excluded from spending calculations.</p>
       <p><b>Estimated Total Spend</b> = max((Start − End) − Transfers Out, 0) + Credit Card Spend</p>
-      <p><b>Total Saved</b> = max(End − (Start − Transfers Out), 0)</p>
+      <p><b>Total Saved</b> = End − (Start − Transfers Out)</p>
     </div>
     <div class="dlgActions">
       <button class="btn full" id="closeHow">Got it</button>
@@ -813,6 +836,12 @@
       minimumFractionDigits: 2,
       maximumFractionDigits: 2
     });
+    function fmtSignedCurrency(n){
+      const value = Number(n);
+      if(!Number.isFinite(value)) return fmt.format(0);
+      const abs = fmt.format(Math.abs(value));
+      return value < 0 ? `- ${abs}` : abs;
+    }
 
     function pad2(n){ return String(n).padStart(2,'0'); }
     function monthId(year, monthIndex0){ return `${year}-${pad2(monthIndex0+1)}`; }
@@ -829,7 +858,7 @@
 
     function compute({start,end,cc,tOut}){
       const delta = end - start;
-      const totalSaved = Math.max(end - (start - tOut), 0);
+      const totalSaved = end - (start - tOut);
       const outflowNet = Math.max((start - end) - tOut, 0);
       const spend = outflowNet + cc;
       return { delta: clampMoney(delta), totalSaved: clampMoney(totalSaved), spend: clampMoney(spend) };
@@ -1195,6 +1224,7 @@
       for(const m of months){
         const c = compute(m);
         const isInlineEditing = inlineEditingId === m.id;
+        const savedClass = c.totalSaved < 0 ? 'var(--bad)' : c.totalSaved > 0 ? 'var(--good)' : 'var(--text)';
 
         // Mobile Cards
         const card = document.createElement('div');
@@ -1204,7 +1234,7 @@
             <div>
               <div class="monthCardTitle">${displayMonth(m.id)}</div>
               <div class="monthCardMeta">Start: ${fmt.format(m.start)} · End: ${fmt.format(m.end)}</div>
-              <div style="color:var(--good); font-size:16px; font-weight:600; margin-top:4px;">Saved: ${fmt.format(c.totalSaved)}</div>
+              <div style="color:${savedClass}; font-size:16px; font-weight:600; margin-top:4px;">Saved: ${fmtSignedCurrency(c.totalSaved)}</div>
             </div>
             <div class="row" style="gap:6px;">
               <button class="btn iconbtn" aria-label="Edit" data-act="inline-edit" data-id="${m.id}">✏️</button>
@@ -1229,7 +1259,7 @@
           <td>${fmt.format(m.end)}</td>
           <td class="${c.delta < 0 ? 'bad' : 'good'}">${fmt.format(c.delta)}</td>
           <td>${fmt.format(m.tOut)}</td>
-          <td style="color:var(--good)">${fmt.format(c.totalSaved)}</td>
+          <td style="color:${savedClass}">${fmtSignedCurrency(c.totalSaved)}</td>
           <td style="font-weight:700">${fmt.format(c.spend)}</td>
           <td>${fmt.format(m.cc)}</td>
           <td style="text-align:center">
@@ -1390,8 +1420,10 @@
     }
     function resolveChartHeight(nodes){
       if(!nodes.fullscreen) return 240;
-      const available = Math.floor(window.innerHeight * 0.72);
-      return Math.max(300, Math.min(480, available));
+      const isLandscape = window.matchMedia('(orientation: landscape)').matches;
+      const chromeOffset = isLandscape ? 92 : 156;
+      const available = Math.floor(window.innerHeight - chromeOffset);
+      return Math.max(isLandscape ? 220 : 280, Math.min(620, available));
     }
     function renderChart(){
       const nodes = getActiveChartNodes();
