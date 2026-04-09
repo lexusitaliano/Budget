@@ -205,6 +205,31 @@
     .swatch { width: 10px; height: 10px; border-radius: 50%; }
     .swatch.end { background: var(--acc); }
     .swatch.cc { background: var(--warn); }
+    .chart-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 4px 14px;
+      justify-content: center;
+    }
+    .chart-preset {
+      border: 1px solid var(--border);
+      background: var(--panel2);
+      color: var(--text);
+      border-radius: 10px;
+      min-height: 38px;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      flex: 1 1 calc(33.333% - 8px);
+      min-width: 90px;
+    }
+    .chart-preset.active {
+      background: var(--acc);
+      color: #fff;
+      border-color: transparent;
+    }
     
     .tooltip {
       position: fixed;
@@ -341,7 +366,7 @@
           <div class="value" id="kpiSpend">$0.00</div>
         </div>
         <div class="kpi">
-          <div class="label" id="kpiDeltaLabel">Checking Δ</div>
+          <div class="label" id="kpiDeltaLabel">Total Saved</div>
           <div class="value" id="kpiDelta">$0.00</div>
         </div>
         <div class="kpi">
@@ -354,6 +379,14 @@
     <section style="margin-top: 32px">
       <h2>Trends</h2>
       <div class="chart-container" id="chartBox">
+        <div class="chart-presets" id="chartPresets">
+          <button class="chart-preset" type="button" data-range="5Y">5 Years</button>
+          <button class="chart-preset" type="button" data-range="YTD">YTD</button>
+          <button class="chart-preset" type="button" data-range="L12">Last 12 Months</button>
+          <button class="chart-preset" type="button" data-range="L6">Last 6 Months</button>
+          <button class="chart-preset" type="button" data-range="QTR">Quarter</button>
+          <button class="chart-preset" type="button" data-range="MON">Month</button>
+        </div>
         <div class="legend">
           <span class="key"><span class="swatch end"></span> End Balance</span>
           <span class="key"><span class="swatch cc"></span> CC Spend</span>
@@ -507,15 +540,16 @@
     function loadState(){
       try {
         const raw = localStorage.getItem(storeKey);
-        if(!raw) return {months:[], ui:{filterYear:'ALL', sort:'DESC'}};
+        if(!raw) return {months:[], ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12'}};
         const parsed = JSON.parse(raw);
         const months = Array.isArray(parsed.months)
           ? parsed.months
               .map(normalizeMonthRecord)
               .filter(m => /^\d{4}-\d{2}$/.test(m.id) && Number.isFinite(m.start) && Number.isFinite(m.end))
           : [];
-        return { months, ui: parsed.ui || {filterYear:'ALL', sort:'DESC'} };
-      } catch(e) { return {months:[], ui:{filterYear:'ALL', sort:'DESC'}}; }
+        const fallbackUi = {filterYear:'ALL', sort:'DESC', chartRange:'L12'};
+        return { months, ui: {...fallbackUi, ...(parsed.ui || {})} };
+      } catch(e) { return {months:[], ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12'}}; }
     }
     function saveState(){ localStorage.setItem(storeKey, JSON.stringify(state)); }
 
@@ -529,8 +563,10 @@
     function getPrevMonthForSelected(){
       const id = selectedId();
       const sorted = sortMonths(state.months, 'ASC');
-      const idx = sorted.findIndex(x => x.id === id);
-      return idx > 0 ? sorted[idx-1] : null;
+      for(let i = sorted.length - 1; i >= 0; i--){
+        if(sorted[i].id < id) return sorted[i];
+      }
+      return null;
     }
 
     // UI Feedback
@@ -576,6 +612,46 @@
       const fy = state.ui.filterYear || 'ALL';
       let arr = fy !== 'ALL' ? state.months.filter(m => m.id.startsWith(fy + '-')) : state.months;
       return sortMonths(arr, state.ui.sort || 'DESC');
+    }
+    function getChartMonths(){
+      const sorted = sortMonths(state.months, 'ASC');
+      if(!sorted.length) return [];
+      const range = state.ui.chartRange || 'L12';
+      const latest = sorted[sorted.length - 1];
+      const latestYear = Number(latest.id.slice(0,4));
+      const latestMonth = Number(latest.id.slice(5,7));
+
+      if(range === 'MON') return sorted.slice(-1);
+      if(range === 'QTR') return sorted.slice(-3);
+      if(range === 'L6') return sorted.slice(-6);
+      if(range === 'L12') return sorted.slice(-12);
+      if(range === '5Y') return sorted.slice(-60);
+      if(range === 'YTD'){
+        return sorted.filter(m => {
+          const y = Number(m.id.slice(0,4));
+          const mm = Number(m.id.slice(5,7));
+          return y === latestYear && mm <= latestMonth;
+        });
+      }
+      return sorted.slice(-12);
+    }
+    function getRangeLabel(range){
+      return ({
+        MON:'Month',
+        QTR:'Quarter',
+        L6:'Last 6 Months',
+        L12:'Last 12 Months',
+        YTD:'YTD',
+        '5Y':'5 Years'
+      })[range] || 'Last 12 Months';
+    }
+    function updatePresetButtons(){
+      const range = state.ui.chartRange || 'L12';
+      $$('.chart-preset').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.range === range);
+      });
+      $('#kpiSpendLabel').textContent = `Total Spend (${getRangeLabel(range)})`;
+      $('#kpiDeltaLabel').textContent = `Total Saved (${getRangeLabel(range)})`;
     }
 
     // Validation & State
@@ -637,16 +713,15 @@
     // Render Data Lists
     function renderMonths(){
       const months = filterMonths();
+      const kpiMonths = getChartMonths();
       const tbody = $('#monthsTable tbody');
       const cards = $('#monthCards');
       tbody.innerHTML = ''; cards.innerHTML = '';
 
-      let totSpend=0, totDelta=0;
+      let totSpend=0, totSaved=0;
       
       for(const m of months){
         const c = compute(m);
-        totSpend += c.spend;
-        totDelta += (m.end - m.start);
 
         // Mobile Cards
         const card = document.createElement('div');
@@ -691,10 +766,15 @@
         tbody.appendChild(tr);
       }
 
-      // Update YTD / KPIs
+      // Update YTD / KPIs from active chart range
+      for(const m of kpiMonths){
+        const c = compute(m);
+        totSpend += c.spend;
+        totSaved += c.totalSaved;
+      }
       $('#kpiSpend').textContent = fmt.format(clampMoney(totSpend));
-      $('#kpiDelta').textContent = fmt.format(clampMoney(totDelta));
-      $('#kpiMonths').textContent = String(months.length);
+      $('#kpiDelta').textContent = fmt.format(clampMoney(totSaved));
+      $('#kpiMonths').textContent = String(kpiMonths.length);
     }
 
     // Chart logic (Responsive)
@@ -702,7 +782,7 @@
     function renderChart(){
       const svg = $('#chart');
       const box = $('#chartBox');
-      const months = filterMonths().slice().reverse();
+      const months = getChartMonths();
       
       // Responsive width measurement
       const W = box.clientWidth || window.innerWidth - 32; 
@@ -715,7 +795,7 @@
         return;
       }
 
-      const padL = 52, padR = 52, padT = 24, padB = 36;
+      const padL = 52, padR = 52, padT = 24, padB = 44;
       const innerW = W - padL - padR;
       const innerH = H - padT - padB;
 
@@ -729,6 +809,15 @@
       const x = i => padL + (months.length===1 ? innerW/2 : (i/(months.length-1))*innerW);
       const yEnd = v => padT + innerH - ((v - endMin) / (endMax - endMin || 1)) * innerH;
       const yCC = v => padT + innerH - (v / ccMax) * innerH;
+      const range = state.ui.chartRange || 'L12';
+      const monthFmtShort = new Intl.DateTimeFormat('en-US', {month:'short'});
+      const monthFmtLong = new Intl.DateTimeFormat('en-US', {month:'short', year:'numeric'});
+      const labelFor = (id)=>{
+        const y = Number(id.slice(0,4));
+        const m = Number(id.slice(5,7));
+        const d = new Date(y, m - 1, 1);
+        return (range === '5Y' || range === 'L12' || range === 'YTD') ? monthFmtLong.format(d) : monthFmtShort.format(d);
+      };
 
       const make = (tag, attrs) => {
         const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -759,6 +848,22 @@
       const pathFor = (arr, fn) => arr.map((v,i)=>`${i===0?'M':'L'} ${x(i)} ${fn(v)}`).join(' ');
       svg.appendChild(make('path',{ d: pathFor(ends, yEnd), fill:'none', stroke:'var(--acc)', 'stroke-width':'3' }));
       svg.appendChild(make('path',{ d: pathFor(ccs, yCC), fill:'none', stroke:'var(--warn)', 'stroke-width':'3' }));
+
+      // X-axis labels (skip labels when needed for readability on mobile widths)
+      const maxLabels = W < 380 ? 4 : W < 520 ? 6 : 10;
+      const step = Math.max(1, Math.ceil(months.length / maxLabels));
+      months.forEach((m, i) => {
+        if(months.length > 1 && i % step !== 0 && i !== months.length - 1) return;
+        const text = make('text',{
+          x: x(i),
+          y: padT + innerH + 16,
+          'text-anchor':'middle',
+          fill:'var(--muted)',
+          'font-size':'10'
+        });
+        text.textContent = labelFor(m.id);
+        svg.appendChild(text);
+      });
 
       // Points & Touch Targets
       months.forEach((m,i)=>{
@@ -906,6 +1011,12 @@
         state.ui.sort = state.ui.sort === 'ASC' ? 'DESC' : 'ASC';
         saveState(); renderAll();
       });
+      $('#chartPresets').addEventListener('click', (ev)=>{
+        const btn = ev.target.closest('[data-range]');
+        if(!btn) return;
+        state.ui.chartRange = btn.dataset.range;
+        saveState(); renderAll();
+      });
 
       // History Actions
       const handleAction = (ev)=>{
@@ -1000,6 +1111,7 @@
 
     function renderAll(){
       buildFilterYear();
+      updatePresetButtons();
       renderMonths();
       renderChart();
       setPreview();
