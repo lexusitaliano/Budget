@@ -248,6 +248,65 @@
       font-size: 14px;
       max-width: 180px;
     }
+    .compareWrap {
+      display: none;
+      margin: 0 4px 12px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+    }
+    .compareWrap.show { display: block; }
+    .compareToggleRow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 36px;
+    }
+    .compareToggleRow label { font-size: 13px; font-weight: 600; }
+    .compareToggleRow input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--acc);
+    }
+    .compareControls {
+      display: none;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border);
+    }
+    .compareControls.show { display: block; }
+    .compareGrid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .compareField label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: .2px;
+    }
+    .compareField input, .compareField select {
+      width: 100%;
+      background: var(--panel2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      min-height: 36px;
+      padding: 6px 8px;
+      font-size: 14px;
+    }
+    .compareMsg {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      text-align: center;
+      min-height: 16px;
+    }
     .inlineEditor {
       margin-top: 12px;
       padding-top: 12px;
@@ -443,12 +502,55 @@
           <label for="trendMonthSel">View month</label>
           <input id="trendMonthSel" type="month" />
         </div>
-        <div class="legend">
+        <div class="compareWrap" id="compareWrap">
+          <div class="compareToggleRow">
+            <label for="trendCompareOn">Compare</label>
+            <input id="trendCompareOn" type="checkbox" />
+          </div>
+          <div class="compareControls" id="compareMonthControls">
+            <div class="compareGrid">
+              <div class="compareField">
+                <label for="comparePrimaryMonth">Selected Month</label>
+                <input id="comparePrimaryMonth" type="month" />
+              </div>
+              <div class="compareField">
+                <label for="compareSecondaryMonth">Previous Month</label>
+                <input id="compareSecondaryMonth" type="month" />
+              </div>
+            </div>
+          </div>
+          <div class="compareControls" id="compareYtdControls">
+            <div class="compareGrid">
+              <div class="compareField">
+                <label for="comparePrimaryYear">Selected Year</label>
+                <select id="comparePrimaryYear"></select>
+              </div>
+              <div class="compareField">
+                <label for="compareSecondaryYear">Previous Year</label>
+                <select id="compareSecondaryYear"></select>
+              </div>
+            </div>
+          </div>
+          <div class="compareControls" id="compareQuarterControls">
+            <div class="compareGrid">
+              <div class="compareField">
+                <label for="comparePrimaryQuarter">Selected Quarter</label>
+                <select id="comparePrimaryQuarter"></select>
+              </div>
+              <div class="compareField">
+                <label for="compareSecondaryQuarter">Previous Quarter</label>
+                <select id="compareSecondaryQuarter"></select>
+              </div>
+            </div>
+          </div>
+          <div class="compareMsg" id="compareMsg"></div>
+        </div>
+        <div class="legend" id="chartLegend">
           <span class="key"><span class="swatch end"></span> End Balance</span>
           <span class="key"><span class="swatch cc"></span> CC Spend</span>
         </div>
         <svg id="chart" role="img" aria-label="Monthly chart"></svg>
-        <div class="hint" style="text-align: center; margin-top: 8px;">Tap points for details</div>
+        <div class="hint" id="chartHint" style="text-align: center; margin-top: 8px;">Tap points for details</div>
       </div>
     </section>
 
@@ -596,7 +698,19 @@
     function loadState(){
       try {
         const raw = localStorage.getItem(storeKey);
-        const defaultUi = {filterYear:'ALL', sort:'DESC', chartRange:'L12', chartMonth:''};
+        const defaultUi = {
+          filterYear:'ALL',
+          sort:'DESC',
+          chartRange:'L12',
+          chartMonth:'',
+          compareOn:false,
+          comparePrimaryMonth:'',
+          compareSecondaryMonth:'',
+          comparePrimaryYear:'',
+          compareSecondaryYear:'',
+          comparePrimaryQuarter:'',
+          compareSecondaryQuarter:''
+        };
         if(!raw) return {months:[], ui:defaultUi};
         const parsed = JSON.parse(raw);
         const months = Array.isArray(parsed.months)
@@ -605,7 +719,12 @@
               .filter(m => /^\d{4}-\d{2}$/.test(m.id) && Number.isFinite(m.start) && Number.isFinite(m.end))
           : [];
         return { months, ui: {...defaultUi, ...(parsed.ui || {})} };
-      } catch(e) { return {months:[], ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12', chartMonth:''}}; }
+      } catch(e) {
+        return {
+          months:[],
+          ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12', chartMonth:'', compareOn:false}
+        };
+      }
     }
     function saveState(){ localStorage.setItem(storeKey, JSON.stringify(state)); }
 
@@ -704,6 +823,82 @@
       }
       return sorted.slice(-12);
     }
+    function compareEligibleRange(range){
+      return range === 'MON' || range === 'YTD' || range === 'QTR';
+    }
+    function monthCursor(id){
+      const y = Number(String(id).slice(0,4));
+      const m = Number(String(id).slice(5,7));
+      return y * 12 + m;
+    }
+    function quarterIdFromMonthId(id){
+      const y = Number(String(id).slice(0,4));
+      const m = Number(String(id).slice(5,7));
+      const q = Math.floor((m - 1) / 3) + 1;
+      return `${y}-Q${q}`;
+    }
+    function quarterLabel(qid){
+      if(!/^\d{4}-Q[1-4]$/.test(String(qid))) return qid;
+      const y = Number(qid.slice(0,4));
+      const q = Number(qid.slice(6,7));
+      return `Q${q} ${y}`;
+    }
+    function quarterCursor(qid){
+      if(!/^\d{4}-Q[1-4]$/.test(String(qid))) return -Infinity;
+      const y = Number(qid.slice(0,4));
+      const q = Number(qid.slice(6,7));
+      return y * 4 + q;
+    }
+    function availableQuarterIds(){
+      const ids = new Set(sortMonths(state.months, 'ASC').map(m => quarterIdFromMonthId(m.id)));
+      const now = new Date();
+      ids.add(`${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`);
+      return Array.from(ids).sort((a,b)=> quarterCursor(a) - quarterCursor(b));
+    }
+    function monthIdFromQuarterStart(qid){
+      const y = Number(qid.slice(0,4));
+      const q = Number(qid.slice(6,7));
+      return `${y}-${pad2((q - 1) * 3 + 1)}`;
+    }
+    function prevQuarterId(qid){
+      const y = Number(qid.slice(0,4));
+      const q = Number(qid.slice(6,7));
+      if(q > 1) return `${y}-Q${q-1}`;
+      return `${y-1}-Q4`;
+    }
+    function clampCompareState(){
+      const sorted = sortMonths(state.months, 'ASC');
+      const latest = sorted[sorted.length - 1];
+      const latestId = latest ? latest.id : getDefaultTrendMonth();
+      if(!state.ui.comparePrimaryMonth || !isValidMonthId(state.ui.comparePrimaryMonth)){
+        state.ui.comparePrimaryMonth = latestId;
+      }
+      if(monthCursor(state.ui.comparePrimaryMonth) > monthCursor(latestId)){
+        state.ui.comparePrimaryMonth = latestId;
+      }
+      const priorMonth = sorted.filter(m => m.id < state.ui.comparePrimaryMonth).slice(-1)[0]?.id || '';
+      if(!isValidMonthId(state.ui.compareSecondaryMonth) || state.ui.compareSecondaryMonth >= state.ui.comparePrimaryMonth){
+        state.ui.compareSecondaryMonth = priorMonth;
+      }
+
+      const years = uniqueYears(state.months).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+      const latestYear = latest ? Number(latest.id.slice(0,4)) : (new Date()).getFullYear();
+      if(!years.includes(latestYear)) years.push(latestYear);
+      const baseYear = state.ui.comparePrimaryYear ? Number(state.ui.comparePrimaryYear) : latestYear;
+      state.ui.comparePrimaryYear = String(years.includes(baseYear) ? baseYear : latestYear);
+      const prevYear = Number(state.ui.comparePrimaryYear) - 1;
+      state.ui.compareSecondaryYear = String(Math.min(prevYear, Number(state.ui.comparePrimaryYear) - 1));
+
+      const qids = availableQuarterIds();
+      const latestQuarter = qids[qids.length - 1] || `${latestYear}-Q${Math.floor(((latest ? Number(latest.id.slice(5,7)) : 1) - 1) / 3) + 1}`;
+      if(!/^\d{4}-Q[1-4]$/.test(String(state.ui.comparePrimaryQuarter)) || !qids.includes(state.ui.comparePrimaryQuarter)){
+        state.ui.comparePrimaryQuarter = latestQuarter;
+      }
+      if(!/^\d{4}-Q[1-4]$/.test(String(state.ui.compareSecondaryQuarter)) || quarterCursor(state.ui.compareSecondaryQuarter) >= quarterCursor(state.ui.comparePrimaryQuarter)){
+        state.ui.compareSecondaryQuarter = prevQuarterId(state.ui.comparePrimaryQuarter);
+      }
+      if(!compareEligibleRange(state.ui.chartRange)) state.ui.compareOn = false;
+    }
     function getRangeLabel(range){
       return ({
         MON:'Month',
@@ -723,6 +918,50 @@
       monthWrap.classList.toggle('show', range === 'MON');
       $('#kpiSpendLabel').textContent = `Total Spend (${getRangeLabel(range)})`;
       $('#kpiDeltaLabel').textContent = `Total Saved (${getRangeLabel(range)})`;
+      updateCompareControls();
+    }
+    function updateCompareControls(){
+      clampCompareState();
+      const range = state.ui.chartRange || 'L12';
+      const showCompare = compareEligibleRange(range);
+      $('#compareWrap').classList.toggle('show', showCompare);
+      if(!showCompare) return;
+      $('#trendCompareOn').checked = !!state.ui.compareOn;
+      $('#compareMonthControls').classList.toggle('show', state.ui.compareOn && range === 'MON');
+      $('#compareYtdControls').classList.toggle('show', state.ui.compareOn && range === 'YTD');
+      $('#compareQuarterControls').classList.toggle('show', state.ui.compareOn && range === 'QTR');
+
+      $('#comparePrimaryMonth').value = state.ui.comparePrimaryMonth || '';
+      $('#compareSecondaryMonth').value = state.ui.compareSecondaryMonth || '';
+      $('#compareSecondaryMonth').max = state.ui.comparePrimaryMonth ? state.ui.comparePrimaryMonth : '';
+
+      const years = uniqueYears(state.months).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+      const yBase = Number(state.ui.comparePrimaryYear) || (new Date()).getFullYear();
+      if(!years.includes(yBase)) years.push(yBase);
+      years.sort((a,b)=>a-b);
+      $('#comparePrimaryYear').innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join('');
+      $('#comparePrimaryYear').value = String(yBase);
+      const prevChoices = years.filter(y => y < yBase);
+      const fallbackPrev = yBase - 1;
+      const finalPrevChoices = prevChoices.length ? prevChoices : [fallbackPrev];
+      $('#compareSecondaryYear').innerHTML = finalPrevChoices.map(y => `<option value="${y}">${y}</option>`).join('');
+      if(!finalPrevChoices.includes(Number(state.ui.compareSecondaryYear))){
+        state.ui.compareSecondaryYear = String(finalPrevChoices[finalPrevChoices.length - 1]);
+      }
+      $('#compareSecondaryYear').value = state.ui.compareSecondaryYear;
+
+      const qids = availableQuarterIds();
+      $('#comparePrimaryQuarter').innerHTML = qids.map(q => `<option value="${q}">${quarterLabel(q)}</option>`).join('');
+      if(!qids.includes(state.ui.comparePrimaryQuarter)) state.ui.comparePrimaryQuarter = qids[qids.length - 1] || '';
+      $('#comparePrimaryQuarter').value = state.ui.comparePrimaryQuarter;
+      const prevQ = qids.filter(q => quarterCursor(q) < quarterCursor(state.ui.comparePrimaryQuarter));
+      const defaultPrevQ = prevQuarterId(state.ui.comparePrimaryQuarter || '');
+      const finalPrevQ = prevQ.length ? prevQ : (defaultPrevQ ? [defaultPrevQ] : []);
+      $('#compareSecondaryQuarter').innerHTML = finalPrevQ.map(q => `<option value="${q}">${quarterLabel(q)}</option>`).join('');
+      if(finalPrevQ.length && !finalPrevQ.includes(state.ui.compareSecondaryQuarter)){
+        state.ui.compareSecondaryQuarter = finalPrevQ[finalPrevQ.length - 1];
+      }
+      $('#compareSecondaryQuarter').value = state.ui.compareSecondaryQuarter || '';
     }
 
     // Validation & State
@@ -889,10 +1128,87 @@
 
     // Chart logic (Responsive)
     let chartPinned = null;
+    function buildTrendComparePayload(primaryMonths){
+      const range = state.ui.chartRange || 'L12';
+      if(!state.ui.compareOn || !compareEligibleRange(range)) return null;
+      const sorted = sortMonths(state.months, 'ASC');
+      if(!sorted.length) return {message:'No data available for comparison.'};
+      if(range === 'MON'){
+        const p = state.ui.comparePrimaryMonth;
+        const s = state.ui.compareSecondaryMonth;
+        if(!isValidMonthId(p) || !isValidMonthId(s) || monthCursor(s) >= monthCursor(p)) return {message:'Choose an earlier comparison month.'};
+        const primary = sorted.find(m => m.id === p);
+        const secondary = sorted.find(m => m.id === s);
+        if(!primary && !secondary) return {message:'No records exist for selected months.'};
+        return {
+          type:'MON',
+          labels:['End Balance','CC Spend','Total Spend'],
+          primaryLabel: displayMonth(p),
+          secondaryLabel: displayMonth(s),
+          primaryValues: primary ? [primary.end, primary.cc, compute(primary).spend] : [null,null,null],
+          secondaryValues: secondary ? [secondary.end, secondary.cc, compute(secondary).spend] : [null,null,null],
+          message: (!primary || !secondary) ? 'One selected month has no record; showing available data only.' : ''
+        };
+      }
+      if(range === 'YTD'){
+        const pYear = Number(state.ui.comparePrimaryYear);
+        const sYear = Number(state.ui.compareSecondaryYear);
+        if(!Number.isFinite(pYear) || !Number.isFinite(sYear) || sYear >= pYear) return {message:'Comparison year must be earlier than selected year.'};
+        const endMonth = primaryMonths.length ? Number(primaryMonths[primaryMonths.length - 1].id.slice(5,7)) : 12;
+        const pick = (y)=> sorted.filter(m => Number(m.id.slice(0,4)) === y && Number(m.id.slice(5,7)) <= endMonth);
+        const pRows = pick(pYear);
+        const sRows = pick(sYear);
+        const months = Array.from({length:endMonth}, (_,i)=> i+1);
+        const byMonth = (rows, mm, key)=>{
+          const rec = rows.find(r => Number(r.id.slice(5,7)) === mm);
+          if(!rec) return null;
+          if(key === 'spend') return compute(rec).spend;
+          return rec[key];
+        };
+        return {
+          type:'YTD',
+          labels: months.map(mm => new Intl.DateTimeFormat('en-US',{month:'short'}).format(new Date(2000, mm-1, 1))),
+          primaryLabel: `${pYear} YTD`,
+          secondaryLabel: `${sYear} YTD`,
+          primaryValues: months.map(mm => byMonth(pRows, mm, 'spend')),
+          secondaryValues: months.map(mm => byMonth(sRows, mm, 'spend')),
+          message: (!pRows.length || !sRows.length) ? 'One YTD range has limited data; missing months are shown as gaps.' : ''
+        };
+      }
+      if(range === 'QTR'){
+        const pQ = state.ui.comparePrimaryQuarter;
+        const sQ = state.ui.compareSecondaryQuarter;
+        if(quarterCursor(sQ) >= quarterCursor(pQ)) return {message:'Comparison quarter must be earlier than selected quarter.'};
+        const quarterRows = (qid)=>{
+          const start = monthIdFromQuarterStart(qid);
+          const startCursor = monthCursor(start);
+          return sorted.filter(m => {
+            const c = monthCursor(m.id);
+            return c >= startCursor && c <= startCursor + 2;
+          });
+        };
+        const pRows = quarterRows(pQ);
+        const sRows = quarterRows(sQ);
+        return {
+          type:'QTR',
+          labels:['M1','M2','M3'],
+          primaryLabel: quarterLabel(pQ),
+          secondaryLabel: quarterLabel(sQ),
+          primaryValues: [0,1,2].map(i => pRows[i] ? compute(pRows[i]).spend : null),
+          secondaryValues: [0,1,2].map(i => sRows[i] ? compute(sRows[i]).spend : null),
+          message: (!pRows.length || !sRows.length) ? 'One quarter has limited data; available months are shown.' : ''
+        };
+      }
+      return null;
+    }
     function renderChart(){
       const svg = $('#chart');
       const box = $('#chartBox');
       const months = getChartMonths();
+      const comparePayload = buildTrendComparePayload(months);
+      const compareActive = !!(comparePayload && comparePayload.type);
+      const legend = $('#chartLegend');
+      const compareMsgEl = $('#compareMsg');
       
       // Responsive width measurement
       const W = box.clientWidth || window.innerWidth - 32; 
@@ -905,9 +1221,73 @@
         return;
       }
 
-      const padL = 52, padR = 52, padT = 24, padB = 44;
+      const padL = 44, padR = 44, padT = 24, padB = 44;
       const innerW = W - padL - padR;
       const innerH = H - padT - padB;
+
+      if(compareActive){
+        const labels = comparePayload.labels;
+        const pVals = comparePayload.primaryValues;
+        const sVals = comparePayload.secondaryValues;
+        const all = pVals.concat(sVals).filter(v => Number.isFinite(v));
+        const max = Math.max(...all, 10);
+        const min = Math.min(...all, 0);
+        const x = i => padL + (labels.length===1 ? innerW/2 : (i/(labels.length-1))*innerW);
+        const y = v => padT + innerH - ((v - min) / (max - min || 1)) * innerH;
+        const make = (tag, attrs) => {
+          const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+          for(const [k,v] of Object.entries(attrs)) el.setAttribute(k, v);
+          return el;
+        };
+        [0,0.5,1].forEach(ratio => {
+          const yy = padT + innerH - ratio * innerH;
+          svg.appendChild(make('line',{x1:padL,y1:yy,x2:padL+innerW,y2:yy, stroke:'var(--border)'}));
+          const val = min + (max - min) * ratio;
+          svg.appendChild(make('text',{x: padL - 6, y: yy + 4, 'text-anchor':'end', fill:'var(--muted)', 'font-size':'10'})).textContent = fmt.format(val);
+        });
+        svg.appendChild(make('line',{x1:padL,y1:padT,x2:padL,y2:padT+innerH, stroke:'var(--border)'}));
+        svg.appendChild(make('text',{x: padL, y: 14, fill:'var(--muted)', 'font-size':'10'})).textContent = 'USD';
+
+        const pathFor = (arr, color, dash='') => {
+          const points = arr.map((v,i)=> Number.isFinite(v) ? `${x(i)} ${y(v)}` : '').filter(Boolean);
+          if(!points.length) return;
+          const d = points.map((pt, idx) => `${idx===0?'M':'L'} ${pt}`).join(' ');
+          svg.appendChild(make('path',{ d, fill:'none', stroke:color, 'stroke-width':'3', 'stroke-dasharray': dash }));
+        };
+        pathFor(pVals, 'var(--acc)', '');
+        pathFor(sVals, 'var(--warn)', '6 4');
+
+        labels.forEach((label, i) => {
+          const text = make('text',{x:x(i), y:padT+innerH+16, 'text-anchor':'middle', fill:'var(--muted)', 'font-size':'10'});
+          text.textContent = label;
+          svg.appendChild(text);
+        });
+        labels.forEach((label, i) => {
+          const p = pVals[i], s = sVals[i];
+          if(Number.isFinite(p)) svg.appendChild(make('circle',{cx:x(i), cy:y(p), r:5, fill:'var(--acc)'}));
+          if(Number.isFinite(s)) svg.appendChild(make('circle',{cx:x(i), cy:y(s), r:5, fill:'var(--warn)'}));
+          const hit = make('circle',{cx:x(i), cy:padT+innerH/2, r:24, fill:'transparent'});
+          hit.addEventListener('pointerdown', (ev)=>{
+            ev.preventDefault();
+            showTooltip(ev.clientX, ev.clientY, {
+              compare:true,
+              label,
+              primaryLabel: comparePayload.primaryLabel,
+              secondaryLabel: comparePayload.secondaryLabel,
+              primaryValue: p,
+              secondaryValue: s
+            });
+          });
+          svg.appendChild(hit);
+        });
+        legend.innerHTML = `
+          <span class="key"><span class="swatch end"></span> ${comparePayload.primaryLabel}</span>
+          <span class="key"><span class="swatch cc"></span> ${comparePayload.secondaryLabel}</span>
+        `;
+        compareMsgEl.textContent = comparePayload.message || '';
+        $('#chartHint').textContent = 'Tap points for comparison details';
+        return;
+      }
 
       const ends = months.map(m=>m.end);
       const ccs  = months.map(m=>m.cc);
@@ -996,18 +1376,33 @@
       svg.addEventListener('pointerdown', (ev)=>{
         if (ev.target.tagName !== 'circle') hideTooltip();
       });
+      legend.innerHTML = `
+        <span class="key"><span class="swatch end"></span> End Balance</span>
+        <span class="key"><span class="swatch cc"></span> CC Spend</span>
+      `;
+      compareMsgEl.textContent = comparePayload?.message || '';
+      $('#chartHint').textContent = 'Tap points for details';
     }
 
     function showTooltip(x, y, data){
       const t = $('#tooltip');
       t.classList.add('show');
-      
-      t.innerHTML = `
-        <div class="t">${displayMonth(data.id)}</div>
-        <div class="l">End Balance (USD): <span class="mono">${fmt.format(data.end)}</span></div>
-        <div class="l">CC Spend (USD): <span class="mono">${fmt.format(data.cc)}</span></div>
-        <div class="l">Total Spend (USD): <span class="mono" style="font-weight:bold; color:var(--text)">${fmt.format(data.spend)}</span></div>
-      `;
+      if(data.compare){
+        const pVal = Number.isFinite(data.primaryValue) ? fmt.format(data.primaryValue) : 'No data';
+        const sVal = Number.isFinite(data.secondaryValue) ? fmt.format(data.secondaryValue) : 'No data';
+        t.innerHTML = `
+          <div class="t">${data.label}</div>
+          <div class="l">${data.primaryLabel}: <span class="mono">${pVal}</span></div>
+          <div class="l">${data.secondaryLabel}: <span class="mono">${sVal}</span></div>
+        `;
+      } else {
+        t.innerHTML = `
+          <div class="t">${displayMonth(data.id)}</div>
+          <div class="l">End Balance (USD): <span class="mono">${fmt.format(data.end)}</span></div>
+          <div class="l">CC Spend (USD): <span class="mono">${fmt.format(data.cc)}</span></div>
+          <div class="l">Total Spend (USD): <span class="mono" style="font-weight:bold; color:var(--text)">${fmt.format(data.spend)}</span></div>
+        `;
+      }
       
       // Smart positioning: Keep inside viewport
       let newX = x + 15;
@@ -1147,12 +1542,71 @@
         if(state.ui.chartRange === 'MON' && !isValidMonthId(state.ui.chartMonth)){
           state.ui.chartMonth = getDefaultTrendMonth();
         }
+        if(!compareEligibleRange(state.ui.chartRange)) state.ui.compareOn = false;
+        clampCompareState();
         saveState(); renderAll();
       });
       $('#trendMonthSel').addEventListener('change', (ev)=>{
         const v = String(ev.target.value || '').trim();
         if(!isValidMonthId(v)) return;
         state.ui.chartMonth = v;
+        if(!state.ui.comparePrimaryMonth) state.ui.comparePrimaryMonth = v;
+        clampCompareState();
+        saveState(); renderAll();
+      });
+      $('#trendCompareOn').addEventListener('change', (ev)=>{
+        state.ui.compareOn = !!ev.target.checked;
+        clampCompareState();
+        saveState(); renderAll();
+      });
+      $('#comparePrimaryMonth').addEventListener('change', (ev)=>{
+        const v = String(ev.target.value || '').trim();
+        if(!isValidMonthId(v)) return;
+        state.ui.comparePrimaryMonth = v;
+        if(!state.ui.compareSecondaryMonth || state.ui.compareSecondaryMonth >= v){
+          const prior = sortMonths(state.months, 'ASC').filter(m => m.id < v).slice(-1)[0]?.id || '';
+          state.ui.compareSecondaryMonth = prior;
+        }
+        clampCompareState();
+        saveState(); renderAll();
+      });
+      $('#compareSecondaryMonth').addEventListener('change', (ev)=>{
+        const v = String(ev.target.value || '').trim();
+        if(!isValidMonthId(v)) return;
+        state.ui.compareSecondaryMonth = v;
+        clampCompareState();
+        saveState(); renderAll();
+      });
+      $('#comparePrimaryYear').addEventListener('change', (ev)=>{
+        const y = Number(ev.target.value);
+        if(!Number.isFinite(y)) return;
+        state.ui.comparePrimaryYear = String(y);
+        state.ui.compareSecondaryYear = String(y - 1);
+        clampCompareState();
+        saveState(); renderAll();
+      });
+      $('#compareSecondaryYear').addEventListener('change', (ev)=>{
+        const y = Number(ev.target.value);
+        if(!Number.isFinite(y)) return;
+        state.ui.compareSecondaryYear = String(y);
+        clampCompareState();
+        saveState(); renderAll();
+      });
+      $('#comparePrimaryQuarter').addEventListener('change', (ev)=>{
+        const q = String(ev.target.value || '');
+        if(!q) return;
+        state.ui.comparePrimaryQuarter = q;
+        if(quarterCursor(state.ui.compareSecondaryQuarter) >= quarterCursor(q)){
+          state.ui.compareSecondaryQuarter = prevQuarterId(q);
+        }
+        clampCompareState();
+        saveState(); renderAll();
+      });
+      $('#compareSecondaryQuarter').addEventListener('change', (ev)=>{
+        const q = String(ev.target.value || '');
+        if(!q) return;
+        state.ui.compareSecondaryQuarter = q;
+        clampCompareState();
         saveState(); renderAll();
       });
 
@@ -1270,6 +1724,7 @@
 
     function renderAll(){
       if(!isValidMonthId(state.ui.chartMonth)) state.ui.chartMonth = getDefaultTrendMonth();
+      clampCompareState();
       buildFilterYear();
       updatePresetButtons();
       syncTrendMonthInput();
