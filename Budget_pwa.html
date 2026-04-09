@@ -1261,6 +1261,7 @@
       const padL = 44, padR = 44, padT = 24, padB = 56;
       const innerW = W - padL - padR;
       const innerH = H - padT - padB;
+      const axisEdgeInset = Math.max(8, Math.min(16, innerW * 0.04));
 
       if(compareActive){
         const labels = comparePayload.labels;
@@ -1269,7 +1270,10 @@
         const all = pVals.concat(sVals).filter(v => Number.isFinite(v));
         const max = Math.max(...all, 10);
         const min = Math.min(...all, 0);
-        const x = i => padL + (labels.length===1 ? innerW/2 : (i/(labels.length-1))*innerW);
+        const x = i => {
+          if(labels.length === 1) return padL + innerW / 2;
+          return padL + axisEdgeInset + (i/(labels.length-1))*(innerW - axisEdgeInset * 2);
+        };
         const y = v => padT + innerH - ((v - min) / (max - min || 1)) * innerH;
         const make = (tag, attrs) => {
           const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -1295,7 +1299,15 @@
         pathFor(sVals, 'var(--warn)', '6 4');
 
         labels.forEach((label, i) => {
-          const text = make('text',{x:x(i), y:padT+innerH+16, 'text-anchor':'middle', fill:'var(--muted)', 'font-size':'10'});
+          const isFirst = i === 0;
+          const isLast = i === labels.length - 1;
+          const text = make('text',{
+            x:x(i),
+            y:padT+innerH+16,
+            'text-anchor': isFirst ? 'start' : isLast ? 'end' : 'middle',
+            fill:'var(--muted)',
+            'font-size':'10'
+          });
           text.textContent = label;
           svg.appendChild(text);
         });
@@ -1333,7 +1345,10 @@
       const endMax = Math.max(...ends, 100);
       const ccMax  = Math.max(...ccs, 10);
 
-      const x = i => padL + (months.length===1 ? innerW/2 : (i/(months.length-1))*innerW);
+      const x = i => {
+        if(months.length === 1) return padL + innerW / 2;
+        return padL + axisEdgeInset + (i/(months.length-1))*(innerW - axisEdgeInset * 2);
+      };
       const yEnd = v => padT + innerH - ((v - endMin) / (endMax - endMin || 1)) * innerH;
       const yCC = v => padT + innerH - (v / ccMax) * innerH;
       const chartType = state.ui.chartType === 'BARLINE' ? 'BARLINE' : 'LINE';
@@ -1374,12 +1389,11 @@
       
       // Paths / bars
       const pathFor = (arr, fn) => arr.map((v,i)=>`${i===0?'M':'L'} ${x(i)} ${fn(v)}`).join(' ');
-      svg.appendChild(make('path',{ d: pathFor(ends, yEnd), fill:'none', stroke:'var(--acc)', 'stroke-width':'3' }));
       if(chartType === 'BARLINE'){
         const slot = months.length === 1 ? innerW * 0.3 : innerW / months.length;
         const barW = Math.max(6, Math.min(18, slot * 0.55));
-        ccs.forEach((val, i) => {
-          const barHeight = Math.max((val / (ccMax || 1)) * innerH, 0);
+        ends.forEach((val, i) => {
+          const barHeight = Math.max(((val - endMin) / (endMax - endMin || 1)) * innerH, 0);
           const left = x(i) - barW / 2;
           const top = padT + innerH - barHeight;
           svg.appendChild(make('rect',{
@@ -1388,11 +1402,13 @@
             width: barW,
             height: Math.max(0, barHeight),
             rx: 3,
-            fill: 'var(--warn)',
+            fill: 'var(--acc)',
             opacity: '0.85'
           }));
         });
+        svg.appendChild(make('path',{ d: pathFor(ccs, yCC), fill:'none', stroke:'var(--warn)', 'stroke-width':'3' }));
       } else {
+        svg.appendChild(make('path',{ d: pathFor(ends, yEnd), fill:'none', stroke:'var(--acc)', 'stroke-width':'3' }));
         svg.appendChild(make('path',{ d: pathFor(ccs, yCC), fill:'none', stroke:'var(--warn)', 'stroke-width':'3' }));
       }
 
@@ -1418,11 +1434,11 @@
       // Points & Touch Targets
       months.forEach((m,i)=>{
         const ex = x(i), ey = yEnd(m.end), cy = yCC(m.cc);
-        svg.appendChild(make('circle',{cx:ex, cy:ey, r:5, fill:'var(--acc)'}));
         if(chartType === 'LINE'){
+          svg.appendChild(make('circle',{cx:ex, cy:ey, r:5, fill:'var(--acc)'}));
           svg.appendChild(make('circle',{cx:ex, cy:cy, r:5, fill:'var(--warn)'}));
         } else {
-          svg.appendChild(make('circle',{cx:ex, cy:cy, r:4, fill:'var(--warn)'}));
+          svg.appendChild(make('circle',{cx:ex, cy:cy, r:5, fill:'var(--warn)'}));
         }
 
         // Large invisible hit target for mobile fingers (r:24)
@@ -1441,8 +1457,8 @@
         if (ev.target.tagName !== 'circle') hideTooltip();
       });
       legend.innerHTML = `
-        <span class="key"><span class="swatch end"></span> End Balance</span>
-        <span class="key"><span class="swatch cc" style="${chartType === 'BARLINE' ? 'border-radius:2px;' : ''}"></span> CC Spend</span>
+        <span class="key"><span class="swatch end" style="${chartType === 'BARLINE' ? 'border-radius:2px;' : ''}"></span> End Balance${chartType === 'BARLINE' ? ' (Bar)' : ''}</span>
+        <span class="key"><span class="swatch cc"></span> CC Spend${chartType === 'BARLINE' ? ' (Line)' : ''}</span>
       `;
       compareMsgEl.textContent = comparePayload?.message || '';
       $('#chartHint').textContent = 'Tap points for details';
