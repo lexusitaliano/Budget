@@ -618,8 +618,8 @@
             <input id="start" inputmode="decimal" type="text" autocomplete="off" placeholder="$0.00" />
           </div>
           <div class="ios-field">
-            <label for="end">End Checking</label>
-            <input id="end" inputmode="decimal" type="text" autocomplete="off" placeholder="$0.00" />
+            <label for="end">End Checking <span class="hint">Optional</span></label>
+            <input id="end" inputmode="decimal" type="text" autocomplete="off" placeholder="$0.00 (optional)" />
           </div>
           <div class="ios-field">
             <label for="tOut">Transfers Out</label>
@@ -831,7 +831,7 @@
       <p><b>Difference</b> = End − Start</p>
       <p><b>Transfers Out</b> is excluded from spending calculations.</p>
       <p><b>Estimated Total Spend</b> = max((Start − End) − Transfers Out, 0) + Credit Card Spend</p>
-      <p><b>Total Saved</b> = End − (Start − Transfers Out)</p>
+      <p><b>Saved</b> = End (or latest Balance Update) − Start. Transfers Out stays separate.</p>
     </div>
     <div class="dlgActions">
       <button class="btn full" id="closeHow">Got it</button>
@@ -918,9 +918,17 @@
       return Array.from(byDate.values()).sort((a,b)=>a.date.localeCompare(b.date));
     }
     function isCurrentMonth(id){ return id === localDateId().slice(0,7); }
-    function getEffectiveEndBalance(record){
+    function hasEndBalance(record){ return Number.isFinite(record?.end); }
+    function getLatestCheckpoint(record){
       const checkpoints = normalizeCheckpoints(record?.checkpoints);
-      return isCurrentMonth(record?.id) && checkpoints.length ? checkpoints[checkpoints.length-1].balance : record.end;
+      return checkpoints.length ? checkpoints[checkpoints.length-1] : null;
+    }
+    function getEffectiveBalance(record){
+      if(hasEndBalance(record)) return record.end;
+      return getLatestCheckpoint(record)?.balance ?? null;
+    }
+    function getSavingsBalance(record){
+      return getEffectiveBalance(record) ?? record.start;
     }
     function getTargetBalance(record){
       const goal = Number(record?.savingsGoal) || 0;
@@ -928,29 +936,32 @@
     }
     function savingsGoalProgress(record){
       const goal = Number(record.savingsGoal) || 0;
-      const saved = clampMoney(getEffectiveEndBalance(record) - (record.start - record.tOut));
+      const saved = clampMoney(getSavingsBalance(record) - record.start);
       const difference = clampMoney(saved - goal);
       return {goal, saved, difference, percent:goal > 0 ? (saved / goal) * 100 : 0};
     }
 
-    function compute({start,end,cc,tOut}){
-      const delta = end - start;
-      const totalSaved = end - (start - tOut);
-      const outflowNet = Math.max((start - end) - tOut, 0);
+    function compute(record){
+      const {start,cc,tOut} = record;
+      const balance = getEffectiveBalance(record);
+      const delta = balance == null ? null : clampMoney(balance - start);
+      const totalSaved = clampMoney(getSavingsBalance(record) - start);
+      const outflowNet = balance == null ? 0 : Math.max((start - balance) - tOut, 0);
       const spend = outflowNet + cc;
-      return { delta: clampMoney(delta), totalSaved: clampMoney(totalSaved), spend: clampMoney(spend) };
+      return { delta, totalSaved, spend: clampMoney(spend) };
     }
 
     function normalizeMonthRecord(raw){
       const start = parseDecimal(raw?.start);
-      const end = parseDecimal(raw?.end);
+      const endMissing = raw?.end === null || raw?.end === '' || raw?.end === undefined;
+      const end = endMissing ? null : parseDecimal(raw.end);
       const tOut = parseDecimal(raw?.tOut);
       const cc = parseDecimal(raw?.cc);
       const savingsGoal = parseDecimal(raw?.savingsGoal);
       return {
         id: raw?.id,
         start: Number.isFinite(start) ? clampMoney(start) : NaN,
-        end: Number.isFinite(end) ? clampMoney(end) : NaN,
+        end: end === null ? null : Number.isFinite(end) ? clampMoney(end) : NaN,
         tOut: Number.isFinite(tOut) ? clampMoney(tOut) : 0,
         cc: Number.isFinite(cc) ? clampMoney(cc) : 0,
         savingsGoal: Number.isFinite(savingsGoal) && savingsGoal >= 0 ? clampMoney(savingsGoal) : 0,
@@ -981,7 +992,7 @@
         const months = Array.isArray(parsed.months)
           ? parsed.months
               .map(normalizeMonthRecord)
-              .filter(m => isValidMonthId(m.id) && Number.isFinite(m.start) && Number.isFinite(m.end))
+              .filter(m => isValidMonthId(m.id) && Number.isFinite(m.start) && (m.end === null || Number.isFinite(m.end)))
           : [];
         return { months, ui: {...defaultUi, ...(parsed.ui || {})} };
       } catch(e) {
@@ -1256,10 +1267,17 @@
       return Number.isFinite(parsed) ? parsed : NaN;
     }
 
+    function parseOptionalEnd(text){
+      const raw = String(text ?? '').trim();
+      if(!raw) return null;
+      const parsed = parseDecimal(raw);
+      return Number.isFinite(parsed) ? parsed : NaN;
+    }
+
     function validateEntry({start,end,cc,tOut,savingsGoal}){
       const errs = [];
       if(!Number.isFinite(start)) errs.push('Valid Start Checking required.');
-      if(!Number.isFinite(end)) errs.push('Valid End Checking required.');
+      if(end !== null && !Number.isFinite(end)) errs.push('End Checking must be a valid amount or left blank.');
       if(!Number.isFinite(tOut)) errs.push('Transfers Out must be a valid amount or left blank.');
       if(!Number.isFinite(cc)) errs.push('Credit Card Spend must be a valid amount or left blank.');
       if(!Number.isFinite(savingsGoal)) errs.push('Savings Goal must be a valid amount or left blank.');
@@ -1270,7 +1288,7 @@
     function entryPayload(){
       return {
         start: parseDecimal($('#start').value),
-        end: parseDecimal($('#end').value),
+        end: parseOptionalEnd($('#end').value),
         tOut: parseOptionalMoney($('#tOut').value),
         cc: parseOptionalMoney($('#cc').value),
         savingsGoal: parseOptionalMoney($('#savingsGoal').value)
@@ -1303,7 +1321,7 @@
       $('#pvSpend').textContent = fmt.format(c.spend);
       
       const prev = getPrevMonthForSelected();
-      if(prev) {
+      if(prev && hasEndBalance(prev)) {
         $('#lastMonthPill').textContent = `Prev End: ${fmt.format(prev.end)}`;
       } else {
         $('#lastMonthPill').textContent = 'No prior month';
@@ -1324,8 +1342,9 @@
       const checkpoints = normalizeCheckpoints(m.checkpoints);
       const balanceItems = [`<div class="balanceSummaryItem"><div class="label">Start</div><div class="amount">${fmt.format(m.start)}</div></div>`];
       if(target != null) balanceItems.push(`<div class="balanceSummaryItem"><div class="label">Target</div><div class="amount">${fmt.format(target)}</div></div>`);
-      if(!isCurrentMonth(m.id)) balanceItems.push(`<div class="balanceSummaryItem"><div class="label">End</div><div class="amount">${fmt.format(m.end)}</div></div>`);
+      if(hasEndBalance(m)) balanceItems.push(`<div class="balanceSummaryItem"><div class="label">End</div><div class="amount">${fmt.format(m.end)}</div></div>`);
       else if(checkpoints.length) balanceItems.push(`<div class="balanceSummaryItem"><div class="label">Current</div><div class="amount">${fmt.format(checkpoints[checkpoints.length-1].balance)}</div></div>`);
+      else balanceItems.push(`<div class="balanceSummaryItem"><div class="label">Current</div><div class="amount">Not updated</div></div>`);
       return `<div class="balanceSummary">${balanceItems.join('')}</div>`;
     }
     function checkpointsMarkup(m){
@@ -1340,14 +1359,14 @@
       let totSpend=0, totSaved=0;
       for(const m of months){
         const c=compute(m), editing=inlineEditingId===m.id;
-        const effective=getEffectiveEndBalance(m), target=getTargetBalance(m);
+        const effective=getEffectiveBalance(m), target=getTargetBalance(m);
         const currentSaved=savingsGoalProgress(m).saved;
         const savedClass=currentSaved<0?'var(--bad)':currentSaved>0?'var(--good)':'var(--text)';
         const card=document.createElement('div'); card.className='monthCard';
-        card.innerHTML=`<div class="monthCardHeader"><div><div class="monthCardTitle">${displayMonth(m.id)}</div>${balanceSummaryMarkup(m)}<div style="color:${savedClass};font-size:16px;font-weight:600;margin-top:4px">Saved: ${fmtSignedCurrency(currentSaved)}</div></div><div class="row" style="gap:6px"><button class="btn iconbtn" aria-label="Edit" data-act="inline-edit" data-id="${m.id}">✏️</button><button class="btn iconbtn danger" aria-label="Delete" data-act="del" data-id="${m.id}">🗑️</button></div></div><div class="monthCardGrid"><div class="kv"><div class="k">Spend</div><div class="v">${fmt.format(c.spend)}</div></div><div class="kv"><div class="k">CC Spend</div><div class="v">${fmt.format(m.cc)}</div></div><div class="kv"><div class="k">Transfers Out</div><div class="v">${fmt.format(m.tOut)}</div></div><div class="kv"><div class="k">Difference</div><div class="v ${c.delta<0?'bad':'good'}">${fmt.format(c.delta)}</div></div></div>${goalMarkup(m)}${checkpointsMarkup(m)}${editing?inlineEditorMarkup(m):''}`;
+        card.innerHTML=`<div class="monthCardHeader"><div><div class="monthCardTitle">${displayMonth(m.id)}</div>${balanceSummaryMarkup(m)}<div style="color:${savedClass};font-size:16px;font-weight:600;margin-top:4px">Saved: ${fmtSignedCurrency(currentSaved)}</div></div><div class="row" style="gap:6px"><button class="btn iconbtn" aria-label="Edit" data-act="inline-edit" data-id="${m.id}">✏️</button><button class="btn iconbtn danger" aria-label="Delete" data-act="del" data-id="${m.id}">🗑️</button></div></div><div class="monthCardGrid"><div class="kv"><div class="k">Spend</div><div class="v">${fmt.format(c.spend)}</div></div><div class="kv"><div class="k">CC Spend</div><div class="v">${fmt.format(m.cc)}</div></div><div class="kv"><div class="k">Transfers Out</div><div class="v">${fmt.format(m.tOut)}</div></div><div class="kv"><div class="k">Difference</div><div class="v ${c.delta == null?'':c.delta<0?'bad':'good'}">${c.delta == null?'—':fmt.format(c.delta)}</div></div></div>${goalMarkup(m)}${checkpointsMarkup(m)}${editing?inlineEditorMarkup(m):''}`;
         cards.appendChild(card);
         const tr=document.createElement('tr');
-        tr.innerHTML=`<td><b>${displayMonth(m.id)}</b></td><td>${fmt.format(m.start)}</td><td>${target==null?'—':fmt.format(target)}</td><td>${fmt.format(effective)}</td><td class="${c.delta<0?'bad':'good'}">${fmt.format(c.delta)}</td><td>${fmt.format(m.tOut)}</td><td style="color:${savedClass}">${fmtSignedCurrency(currentSaved)}</td><td>${m.savingsGoal?fmt.format(m.savingsGoal):'—'}</td><td style="font-weight:700">${fmt.format(c.spend)}</td><td>${fmt.format(m.cc)}</td><td style="text-align:center"><button class="btn iconbtn" data-act="inline-edit" data-id="${m.id}" aria-label="Edit">✏️</button><button class="btn iconbtn danger" data-act="del" data-id="${m.id}" aria-label="Delete">🗑️</button></td>`;
+        tr.innerHTML=`<td><b>${displayMonth(m.id)}</b></td><td>${fmt.format(m.start)}</td><td>${target==null?'—':fmt.format(target)}</td><td>${effective==null?'Not updated':fmt.format(effective)}</td><td class="${c.delta == null?'':c.delta<0?'bad':'good'}">${c.delta == null?'—':fmt.format(c.delta)}</td><td>${fmt.format(m.tOut)}</td><td style="color:${savedClass}">${fmtSignedCurrency(currentSaved)}</td><td>${m.savingsGoal?fmt.format(m.savingsGoal):'—'}</td><td style="font-weight:700">${fmt.format(c.spend)}</td><td>${fmt.format(m.cc)}</td><td style="text-align:center"><button class="btn iconbtn" data-act="inline-edit" data-id="${m.id}" aria-label="Edit">✏️</button><button class="btn iconbtn danger" data-act="del" data-id="${m.id}" aria-label="Delete">🗑️</button></td>`;
         tbody.appendChild(tr);
         if(editing){const e=document.createElement('tr');e.innerHTML=`<td colspan="11">${inlineEditorMarkup(m)}</td>`;tbody.appendChild(e);}
       }
@@ -1355,7 +1374,7 @@
       $('#kpiSpend').textContent=fmt.format(clampMoney(totSpend)); $('#kpiDelta').textContent=fmt.format(clampMoney(totSaved)); $('#kpiMonths').textContent=String(kpiMonths.length);
     }
     function inlineEditorMarkup(m){
-      return `<div class="inlineEditor" data-inline-editor data-id="${m.id}"><div class="inlineGrid"><div class="inlineField"><label>Start</label><input inputmode="decimal" data-field="start" value="${m.start.toFixed(2)}"></div><div class="inlineField"><label>End</label><input inputmode="decimal" data-field="end" value="${m.end.toFixed(2)}"></div><div class="inlineField"><label>Transfers Out</label><input inputmode="decimal" data-field="tOut" value="${m.tOut?m.tOut.toFixed(2):''}" placeholder="optional"></div><div class="inlineField"><label>Credit Card</label><input inputmode="decimal" data-field="cc" value="${m.cc?m.cc.toFixed(2):''}" placeholder="optional"></div><div class="inlineField"><label>Savings Goal</label><input inputmode="decimal" data-field="savingsGoal" value="${m.savingsGoal?m.savingsGoal.toFixed(2):''}" placeholder="optional"></div></div><div class="inlineActions"><button class="btn small" type="button" data-act="inline-cancel" data-id="${m.id}">Cancel</button><button class="btn small primary" type="button" data-act="inline-save" data-id="${m.id}">Save</button></div></div>`;
+      return `<div class="inlineEditor" data-inline-editor data-id="${m.id}"><div class="inlineGrid"><div class="inlineField"><label>Start</label><input inputmode="decimal" data-field="start" value="${m.start.toFixed(2)}"></div><div class="inlineField"><label>End <span class="hint">Optional</span></label><input inputmode="decimal" data-field="end" value="${hasEndBalance(m)?m.end.toFixed(2):''}" placeholder="optional"></div><div class="inlineField"><label>Transfers Out</label><input inputmode="decimal" data-field="tOut" value="${m.tOut?m.tOut.toFixed(2):''}" placeholder="optional"></div><div class="inlineField"><label>Credit Card</label><input inputmode="decimal" data-field="cc" value="${m.cc?m.cc.toFixed(2):''}" placeholder="optional"></div><div class="inlineField"><label>Savings Goal</label><input inputmode="decimal" data-field="savingsGoal" value="${m.savingsGoal?m.savingsGoal.toFixed(2):''}" placeholder="optional"></div></div><div class="inlineActions"><button class="btn small" type="button" data-act="inline-cancel" data-id="${m.id}">Cancel</button><button class="btn small primary" type="button" data-act="inline-save" data-id="${m.id}">Save</button></div></div>`;
     }
 
     // Chart logic (Responsive)
@@ -1379,8 +1398,8 @@
           labels:['End Balance','CC Spend','Total Spend'],
           primaryLabel: displayMonth(p),
           secondaryLabel: displayMonth(s),
-          primaryValues: primary ? [primary.end, primary.cc, compute(primary).spend] : [null,null,null],
-          secondaryValues: secondary ? [secondary.end, secondary.cc, compute(secondary).spend] : [null,null,null],
+          primaryValues: primary ? [getEffectiveBalance(primary), primary.cc, compute(primary).spend] : [null,null,null],
+          secondaryValues: secondary ? [getEffectiveBalance(secondary), secondary.cc, compute(secondary).spend] : [null,null,null],
           message: (!primary || !secondary) ? 'One selected month has no record; showing available data only.' : ''
         };
       }
@@ -1573,7 +1592,7 @@
         return;
       }
 
-      const ends = months.map(m=>m.missing?null:getEffectiveEndBalance(m));
+      const ends = months.map(m=>m.missing?null:getEffectiveBalance(m));
       const ccs  = months.map(m=>m.missing?null:m.cc);
 
       const finiteEnds=ends.filter(Number.isFinite), finiteCcs=ccs.filter(Number.isFinite);
@@ -1676,7 +1695,7 @@
         if(m.missing) return;
         const ex = x(i), ey = yEnd(ends[i]), cy = yCC(m.cc);
         if(chartType === 'LINE'){
-          svg.appendChild(make('circle',{cx:ex, cy:ey, r:5, fill:'var(--acc)'}));
+          if(Number.isFinite(ends[i])) svg.appendChild(make('circle',{cx:ex, cy:ey, r:5, fill:'var(--acc)'}));
           svg.appendChild(make('circle',{cx:ex, cy:cy, r:5, fill:'var(--warn)'}));
         } else {
           svg.appendChild(make('circle',{cx:ex, cy:cy, r:5, fill:'var(--warn)'}));
@@ -1687,7 +1706,7 @@
         const triggerTooltip = (ev) => {
           ev.preventDefault();
           const comp = compute(m);
-          showTooltip(ev.clientX, ev.clientY, {...m, ...comp});
+          showTooltip(ev.clientX, ev.clientY, {...m, ...comp, effectiveBalance:getEffectiveBalance(m)});
         };
         hit.addEventListener('pointerdown', triggerTooltip);
         svg.appendChild(hit);
@@ -1743,7 +1762,7 @@
       } else {
         t.innerHTML = `
           <div class="t">${displayMonth(data.id)}</div>
-          <div class="l">End Balance (USD): <span class="mono">${fmt.format(data.end)}</span></div>
+          <div class="l">${hasEndBalance(data)?'End':'Current'} Balance (USD): <span class="mono">${data.effectiveBalance==null?'Not updated':fmt.format(data.effectiveBalance)}</span></div>
           <div class="l">CC Spend (USD): <span class="mono">${fmt.format(data.cc)}</span></div>
           <div class="l">Total Spend (USD): <span class="mono" style="font-weight:bold; color:var(--text)">${fmt.format(data.spend)}</span></div>
         `;
@@ -1778,7 +1797,7 @@
       $('#yearSel').value = String(Number(y));
       $('#monthSel').value = String(Number(mm)-1);
       $('#start').value = fmt.format(m.start);
-      $('#end').value = fmt.format(m.end);
+      $('#end').value = hasEndBalance(m) ? fmt.format(m.end) : '';
       $('#tOut').value = m.tOut === 0 ? '' : fmt.format(m.tOut);
       $('#cc').value = m.cc === 0 ? '' : fmt.format(m.cc);
       $('#savingsGoal').value = m.savingsGoal === 0 ? '' : fmt.format(m.savingsGoal);
@@ -1804,7 +1823,7 @@
     function readInlinePayload(editorEl){
       return {
         start: parseDecimal($('[data-field="start"]', editorEl)?.value),
-        end: parseDecimal($('[data-field="end"]', editorEl)?.value),
+        end: parseOptionalEnd($('[data-field="end"]', editorEl)?.value),
         tOut: parseOptionalMoney($('[data-field="tOut"]', editorEl)?.value),
         cc: parseOptionalMoney($('[data-field="cc"]', editorEl)?.value),
         savingsGoal: parseOptionalMoney($('[data-field="savingsGoal"]', editorEl)?.value)
@@ -1834,7 +1853,7 @@
     function wire(){
       ['start','end','tOut','cc','savingsGoal'].forEach(id=>{
         const input = $('#'+id);
-        const isOptional = id === 'tOut' || id === 'cc' || id === 'savingsGoal';
+        const isOptional = id === 'end' || id === 'tOut' || id === 'cc' || id === 'savingsGoal';
         input.addEventListener('input', setPreview);
         input.addEventListener('focus', ()=>{
           unformatInputMoney(input, isOptional);
@@ -1853,7 +1872,7 @@
 
       $('#usePrevEnd').addEventListener('click', ()=>{
         const prev = getPrevMonthForSelected();
-        if(!prev) return toast('No prior month found.');
+        if(!prev || !hasEndBalance(prev)) return toast('No finalized prior month found.');
         $('#start').value = fmt.format(prev.end);
         setPreview();
       });
@@ -2103,7 +2122,7 @@
       $('#exportCsv').addEventListener('click', ()=>{
         setDialogOpen($('#settingsMenu'),false);
         const rows=[['month','start','end','cc','tOut','savingsGoal'].join(',')];
-        sortMonths(state.months,'ASC').forEach(m=>rows.push([m.id,m.start.toFixed(2),m.end.toFixed(2),m.cc.toFixed(2),m.tOut.toFixed(2),m.savingsGoal.toFixed(2)].join(',')));
+        sortMonths(state.months,'ASC').forEach(m=>rows.push([m.id,m.start.toFixed(2),hasEndBalance(m)?m.end.toFixed(2):'',m.cc.toFixed(2),m.tOut.toFixed(2),m.savingsGoal.toFixed(2)].join(',')));
         download('spending-tracker.csv',rows.join('\n'),'text/csv;charset=utf-8');
         toast('CSV exported. Use Export Backup to include balance updates.');
       });
@@ -2116,12 +2135,12 @@
         const lines=(await f.text()).split(/\r?\n/).filter(l=>l.trim()); let imported=0,skipped=0;
         if(!lines.length){toast('CSV is empty.');ev.target.value='';return;}
         const headers=lines[0].split(',').map(x=>x.replaceAll('"','').trim());
-        const required=['month','start','end','cc','tOut'];
+        const required=['month','start','cc','tOut'];
         if(!required.every(h=>headers.includes(h))){toast('CSV headers are not recognized.');ev.target.value='';return;}
         for(const line of lines.slice(1)){
           const cols=line.split(',').map(x=>x.replaceAll('"','').trim()), value=h=>cols[headers.indexOf(h)];
           const id=value('month'); const existing=state.months.find(m=>m.id===id);
-          const payload={start:parseDecimal(value('start')),end:parseDecimal(value('end')),cc:parseOptionalMoney(value('cc')),tOut:parseOptionalMoney(value('tOut')),savingsGoal:headers.includes('savingsGoal')?parseOptionalMoney(value('savingsGoal')):(existing?.savingsGoal||0)};
+          const payload={start:parseDecimal(value('start')),end:parseOptionalEnd(value('end')),cc:parseOptionalMoney(value('cc')),tOut:parseOptionalMoney(value('tOut')),savingsGoal:headers.includes('savingsGoal')?parseOptionalMoney(value('savingsGoal')):(existing?.savingsGoal||0)};
           if(!isValidMonthId(id)||validateEntry(payload).length){skipped++;continue;}
           const record={id,...payload,checkpoints:existing?.checkpoints||[]}; const idx=state.months.findIndex(m=>m.id===id);
           idx>=0?state.months.splice(idx,1,record):state.months.push(record); imported++;
@@ -2132,7 +2151,7 @@
         setDialogOpen($('#settingsMenu'),false);const f=ev.target.files?.[0];if(!f)return;
         try{
           const parsed=JSON.parse(await f.text()); if(!Array.isArray(parsed.months)) throw new Error('Missing months');
-          const months=parsed.months.map(normalizeMonthRecord).filter(m=>isValidMonthId(m.id)&&Number.isFinite(m.start)&&Number.isFinite(m.end));
+          const months=parsed.months.map(normalizeMonthRecord).filter(m=>isValidMonthId(m.id)&&Number.isFinite(m.start)&&(m.end===null||Number.isFinite(m.end)));
           state={months,ui:{...state.ui,...(parsed.ui||{})}};saveState();renderAll();toast(`Imported backup with ${months.length} months.`);
         }catch(e){toast('Backup file is invalid.');} ev.target.value='';
       });
@@ -2142,13 +2161,17 @@
         try{
           check('Date formatting',displayMonth('2025-01')==='January 2025');
           check('Spending calculation',compute({start:100,end:80,cc:20,tOut:0}).spend===40);
-          check('Savings calculation',compute({start:5000,end:5800,cc:0,tOut:300}).totalSaved===1100);
+          check('Savings excludes transfers',compute({start:5000,end:5800,cc:0,tOut:300}).totalSaved===800);
           const goal=savingsGoalProgress({id:'2025-01',start:100,end:150,tOut:0,savingsGoal:75,checkpoints:[]});
           check('Savings goal calculation',goal.saved===50);
           check('Goal exceeded calculation',goal.difference===-25 && savingsGoalProgress({id:'2025-01',start:100,end:190,tOut:0,savingsGoal:75,checkpoints:[]}).difference===15);
           check('Target balance derivation',getTargetBalance({start:5000,savingsGoal:2500})===7500 && getTargetBalance({start:5000,savingsGoal:0})===null);
           const currentId=localDateId().slice(0,7), currentDate=localDateId();
-          check('Current checkpoint authority',getEffectiveEndBalance({id:currentId,end:5100,checkpoints:[{date:currentDate,balance:6200}]})===6200);
+          check('End balance authority',getEffectiveBalance({id:currentId,end:5100,checkpoints:[{date:currentDate,balance:6200}]})===5100);
+          check('Latest checkpoint authority',getEffectiveBalance({id:currentId,end:null,checkpoints:[{date:currentDate,balance:6200}]})===6200);
+          check('Blank End accepted',validateEntry({start:5000,end:null,cc:0,tOut:0,savingsGoal:2500}).length===0);
+          check('No update means zero saved',savingsGoalProgress({id:currentId,start:5000,end:null,tOut:0,savingsGoal:2500,checkpoints:[]}).saved===0);
+          check('Zero End finalized',hasEndBalance({end:0})&&getSavingsBalance({start:5000,end:0,checkpoints:[]})===0);
           check('Current checkpoint date default',defaultCheckpointDate(currentId)===currentDate);
           check('Month ID validation',isValidMonthId('2026-12')&&!isValidMonthId('2026-13')&&!isValidMonthId('2026-00'));
           const cps=normalizeCheckpoints([{date:'2026-01-05',balance:80},{date:'bad',balance:9},{date:'2026-01-01',balance:100},{date:'2026-01-05',balance:90}]);
