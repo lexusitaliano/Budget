@@ -829,9 +829,9 @@
     <div class="dlgHead">Formulas</div>
     <div style="color: var(--muted); font-size: 14px;">
       <p><b>Difference</b> = End − Start</p>
-      <p><b>Transfers Out</b> is excluded from spending calculations.</p>
+      <p><b>Transfers Out</b> is money intentionally moved out of checking and is excluded from spending calculations.</p>
       <p><b>Estimated Total Spend</b> = max((Start − End) − Transfers Out, 0) + Credit Card Spend</p>
-      <p><b>Saved</b> = End (or latest Balance Update) − Start. Transfers Out stays separate.</p>
+      <p><b>Saved</b> = End (or latest Balance Update) − (Start − Transfers Out).</p>
     </div>
     <div class="dlgActions">
       <button class="btn full" id="closeHow">Got it</button>
@@ -928,15 +928,25 @@
       return getLatestCheckpoint(record)?.balance ?? null;
     }
     function getSavingsBalance(record){
-      return getEffectiveBalance(record) ?? record.start;
+      return getEffectiveBalance(record);
+    }
+    function getAdjustedStart(record){
+      const start = Number(record?.start);
+      const transfersOut = Number(record?.tOut) || 0;
+      return clampMoney(start - transfersOut);
     }
     function getTargetBalance(record){
       const goal = Number(record?.savingsGoal) || 0;
-      return goal > 0 ? clampMoney(record.start + goal) : null;
+      return goal > 0 ? clampMoney(getAdjustedStart(record) + goal) : null;
+    }
+    function getSavedAmount(record){
+      const balance = getSavingsBalance(record);
+      if(!Number.isFinite(balance)) return 0;
+      return clampMoney(balance - getAdjustedStart(record));
     }
     function savingsGoalProgress(record){
-      const goal = Number(record.savingsGoal) || 0;
-      const saved = clampMoney(getSavingsBalance(record) - record.start);
+      const goal = Number(record?.savingsGoal) || 0;
+      const saved = getSavedAmount(record);
       const difference = clampMoney(saved - goal);
       return {goal, saved, difference, percent:goal > 0 ? (saved / goal) * 100 : 0};
     }
@@ -945,7 +955,7 @@
       const {start,cc,tOut} = record;
       const balance = getEffectiveBalance(record);
       const delta = balance == null ? null : clampMoney(balance - start);
-      const totalSaved = clampMoney(getSavingsBalance(record) - start);
+      const totalSaved = getSavedAmount(record);
       const outflowNet = balance == null ? 0 : Math.max((start - balance) - tOut, 0);
       const spend = outflowNet + cc;
       return { delta, totalSaved, spend: clampMoney(spend) };
@@ -2161,17 +2171,25 @@
         try{
           check('Date formatting',displayMonth('2025-01')==='January 2025');
           check('Spending calculation',compute({start:100,end:80,cc:20,tOut:0}).spend===40);
-          check('Savings excludes transfers',compute({start:5000,end:5800,cc:0,tOut:300}).totalSaved===800);
+          check('Transfer Out adjusts savings baseline',compute({start:5000,end:5800,cc:0,tOut:300}).totalSaved===1100);
           const goal=savingsGoalProgress({id:'2025-01',start:100,end:150,tOut:0,savingsGoal:75,checkpoints:[]});
           check('Savings goal calculation',goal.saved===50);
           check('Goal exceeded calculation',goal.difference===-25 && savingsGoalProgress({id:'2025-01',start:100,end:190,tOut:0,savingsGoal:75,checkpoints:[]}).difference===15);
-          check('Target balance derivation',getTargetBalance({start:5000,savingsGoal:2500})===7500 && getTargetBalance({start:5000,savingsGoal:0})===null);
+          check('Target balance derivation',getTargetBalance({start:5000,tOut:0,savingsGoal:2500})===7500 && getTargetBalance({start:5000,tOut:0,savingsGoal:0})===null);
           const currentId=localDateId().slice(0,7), currentDate=localDateId();
           check('End balance authority',getEffectiveBalance({id:currentId,end:5100,checkpoints:[{date:currentDate,balance:6200}]})===5100);
           check('Latest checkpoint authority',getEffectiveBalance({id:currentId,end:null,checkpoints:[{date:currentDate,balance:6200}]})===6200);
           check('Blank End accepted',validateEntry({start:5000,end:null,cc:0,tOut:0,savingsGoal:2500}).length===0);
           check('No update means zero saved',savingsGoalProgress({id:currentId,start:5000,end:null,tOut:0,savingsGoal:2500,checkpoints:[]}).saved===0);
           check('Zero End finalized',hasEndBalance({end:0})&&getSavingsBalance({start:5000,end:0,checkpoints:[]})===0);
+          const transferEnd={start:40000,tOut:20000,end:25000,cc:0,savingsGoal:0,checkpoints:[]};
+          check('Transfer Out adjusted start and saved',getAdjustedStart(transferEnd)===20000&&getSavedAmount(transferEnd)===5000);
+          check('Transfer Out is not a loss',getSavedAmount({...transferEnd,end:20000})===0&&compute({...transferEnd,end:20000}).spend===0);
+          const transferCurrent={id:currentId,start:40000,tOut:20000,end:null,cc:0,savingsGoal:5000,checkpoints:[{date:currentDate,balance:22500}]};
+          const transferProgress=savingsGoalProgress(transferCurrent);
+          check('Transfer Out current goal progress',getTargetBalance(transferCurrent)===25000&&transferProgress.saved===2500&&transferProgress.difference===-2500&&transferProgress.percent===50);
+          const transferReached={...transferCurrent,end:25500};
+          check('Transfer Out goal exceeded',getSavedAmount(transferReached)===5500&&savingsGoalProgress(transferReached).difference===500);
           check('Current checkpoint date default',defaultCheckpointDate(currentId)===currentDate);
           check('Month ID validation',isValidMonthId('2026-12')&&!isValidMonthId('2026-13')&&!isValidMonthId('2026-00'));
           const cps=normalizeCheckpoints([{date:'2026-01-05',balance:80},{date:'bad',balance:9},{date:'2026-01-01',balance:100},{date:'2026-01-05',balance:90}]);
