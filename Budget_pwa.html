@@ -185,6 +185,11 @@
     .monthCardHeader { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 12px; }
     .monthCardTitle { font-size: 18px; font-weight: 700; }
     .monthCardMeta { font-size: 13px; color: var(--muted); }
+    .monthCardHeader > div:first-child { min-width:0; flex:1; }
+    .balanceSummary { display:flex; flex-wrap:wrap; gap:8px 20px; margin-top:8px; }
+    .balanceSummaryItem { min-width:0; }
+    .balanceSummaryItem .label { color:var(--muted); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.35px; }
+    .balanceSummaryItem .amount { margin-top:2px; font-size:15px; font-weight:700; font-variant-numeric:tabular-nums; }
     .monthCardGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .kv { display: flex; flex-direction: column; }
     .kv .k { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
@@ -753,7 +758,8 @@
             <tr>
               <th>Month</th>
               <th>Start</th>
-              <th>End</th>
+              <th>Target</th>
+              <th>Current / End</th>
               <th>Δ</th>
               <th>Transfers</th>
               <th>Saved</th>
@@ -915,6 +921,10 @@
     function getEffectiveEndBalance(record){
       const checkpoints = normalizeCheckpoints(record?.checkpoints);
       return isCurrentMonth(record?.id) && checkpoints.length ? checkpoints[checkpoints.length-1].balance : record.end;
+    }
+    function getTargetBalance(record){
+      const goal = Number(record?.savingsGoal) || 0;
+      return goal > 0 ? clampMoney(record.start + goal) : null;
     }
     function savingsGoalProgress(record){
       const goal = Number(record.savingsGoal) || 0;
@@ -1307,7 +1317,16 @@
       const status = p.difference > 0 ? `${fmt.format(p.difference)} above goal` : p.difference === 0 ? 'Goal reached' : `${fmt.format(Math.abs(p.difference))} remaining`;
       const reached = p.difference >= 0;
       const width = Math.max(0, Math.min(100, p.percent));
-      return `<div class="goalProgress" aria-label="Savings goal progress"><div class="goalProgressHead"><span>Savings Goal</span><span>${status}</span></div><div class="goalProgressValues"><span>${fmt.format(p.saved)} of ${fmt.format(p.goal)}</span><span>${Math.max(0,Math.round(p.percent))}%</span></div><div class="goalTrack" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(width)}"><div class="goalFill ${reached?'reached':''}" style="width:${width}%"></div></div></div>`;
+      return `<div class="goalProgress" aria-label="Savings goal progress"><div class="goalProgressHead"><span>Savings Goal</span><span>${status}</span></div><div class="goalProgressValues"><span>${fmt.format(p.saved)} of ${fmt.format(p.goal)} saved</span><span>${Math.round(p.percent)}%</span></div><div class="goalTrack" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(width)}"><div class="goalFill ${reached?'reached':''}" style="width:${width}%"></div></div></div>`;
+    }
+    function balanceSummaryMarkup(m){
+      const target = getTargetBalance(m);
+      const checkpoints = normalizeCheckpoints(m.checkpoints);
+      const balanceItems = [`<div class="balanceSummaryItem"><div class="label">Start</div><div class="amount">${fmt.format(m.start)}</div></div>`];
+      if(target != null) balanceItems.push(`<div class="balanceSummaryItem"><div class="label">Target</div><div class="amount">${fmt.format(target)}</div></div>`);
+      if(!isCurrentMonth(m.id)) balanceItems.push(`<div class="balanceSummaryItem"><div class="label">End</div><div class="amount">${fmt.format(m.end)}</div></div>`);
+      else if(checkpoints.length) balanceItems.push(`<div class="balanceSummaryItem"><div class="label">Current</div><div class="amount">${fmt.format(checkpoints[checkpoints.length-1].balance)}</div></div>`);
+      return `<div class="balanceSummary">${balanceItems.join('')}</div>`;
     }
     function checkpointsMarkup(m){
       const open = expandedCheckpointMonths.has(m.id);
@@ -1321,15 +1340,16 @@
       let totSpend=0, totSaved=0;
       for(const m of months){
         const c=compute(m), editing=inlineEditingId===m.id;
-        const savedClass=c.totalSaved<0?'var(--bad)':c.totalSaved>0?'var(--good)':'var(--text)';
-        const effective=getEffectiveEndBalance(m);
+        const effective=getEffectiveEndBalance(m), target=getTargetBalance(m);
+        const currentSaved=savingsGoalProgress(m).saved;
+        const savedClass=currentSaved<0?'var(--bad)':currentSaved>0?'var(--good)':'var(--text)';
         const card=document.createElement('div'); card.className='monthCard';
-        card.innerHTML=`<div class="monthCardHeader"><div><div class="monthCardTitle">${displayMonth(m.id)}</div><div class="monthCardMeta">Start: ${fmt.format(m.start)} · ${isCurrentMonth(m.id)&&m.checkpoints.length?'Current':'End'}: ${fmt.format(isCurrentMonth(m.id)?effective:m.end)}</div><div style="color:${savedClass};font-size:16px;font-weight:600;margin-top:4px">Saved: ${fmtSignedCurrency(c.totalSaved)}</div></div><div class="row" style="gap:6px"><button class="btn iconbtn" aria-label="Edit" data-act="inline-edit" data-id="${m.id}">✏️</button><button class="btn iconbtn danger" aria-label="Delete" data-act="del" data-id="${m.id}">🗑️</button></div></div><div class="monthCardGrid"><div class="kv"><div class="k">Spend</div><div class="v">${fmt.format(c.spend)}</div></div><div class="kv"><div class="k">CC Spend</div><div class="v">${fmt.format(m.cc)}</div></div><div class="kv"><div class="k">Transfers Out</div><div class="v">${fmt.format(m.tOut)}</div></div><div class="kv"><div class="k">Difference</div><div class="v ${c.delta<0?'bad':'good'}">${fmt.format(c.delta)}</div></div></div>${goalMarkup(m)}${checkpointsMarkup(m)}${editing?inlineEditorMarkup(m):''}`;
+        card.innerHTML=`<div class="monthCardHeader"><div><div class="monthCardTitle">${displayMonth(m.id)}</div>${balanceSummaryMarkup(m)}<div style="color:${savedClass};font-size:16px;font-weight:600;margin-top:4px">Saved: ${fmtSignedCurrency(currentSaved)}</div></div><div class="row" style="gap:6px"><button class="btn iconbtn" aria-label="Edit" data-act="inline-edit" data-id="${m.id}">✏️</button><button class="btn iconbtn danger" aria-label="Delete" data-act="del" data-id="${m.id}">🗑️</button></div></div><div class="monthCardGrid"><div class="kv"><div class="k">Spend</div><div class="v">${fmt.format(c.spend)}</div></div><div class="kv"><div class="k">CC Spend</div><div class="v">${fmt.format(m.cc)}</div></div><div class="kv"><div class="k">Transfers Out</div><div class="v">${fmt.format(m.tOut)}</div></div><div class="kv"><div class="k">Difference</div><div class="v ${c.delta<0?'bad':'good'}">${fmt.format(c.delta)}</div></div></div>${goalMarkup(m)}${checkpointsMarkup(m)}${editing?inlineEditorMarkup(m):''}`;
         cards.appendChild(card);
         const tr=document.createElement('tr');
-        tr.innerHTML=`<td><b>${displayMonth(m.id)}</b></td><td>${fmt.format(m.start)}</td><td>${fmt.format(m.end)}</td><td class="${c.delta<0?'bad':'good'}">${fmt.format(c.delta)}</td><td>${fmt.format(m.tOut)}</td><td style="color:${savedClass}">${fmtSignedCurrency(c.totalSaved)}</td><td>${m.savingsGoal?fmt.format(m.savingsGoal):'—'}</td><td style="font-weight:700">${fmt.format(c.spend)}</td><td>${fmt.format(m.cc)}</td><td style="text-align:center"><button class="btn iconbtn" data-act="inline-edit" data-id="${m.id}" aria-label="Edit">✏️</button><button class="btn iconbtn danger" data-act="del" data-id="${m.id}" aria-label="Delete">🗑️</button></td>`;
+        tr.innerHTML=`<td><b>${displayMonth(m.id)}</b></td><td>${fmt.format(m.start)}</td><td>${target==null?'—':fmt.format(target)}</td><td>${fmt.format(effective)}</td><td class="${c.delta<0?'bad':'good'}">${fmt.format(c.delta)}</td><td>${fmt.format(m.tOut)}</td><td style="color:${savedClass}">${fmtSignedCurrency(currentSaved)}</td><td>${m.savingsGoal?fmt.format(m.savingsGoal):'—'}</td><td style="font-weight:700">${fmt.format(c.spend)}</td><td>${fmt.format(m.cc)}</td><td style="text-align:center"><button class="btn iconbtn" data-act="inline-edit" data-id="${m.id}" aria-label="Edit">✏️</button><button class="btn iconbtn danger" data-act="del" data-id="${m.id}" aria-label="Delete">🗑️</button></td>`;
         tbody.appendChild(tr);
-        if(editing){const e=document.createElement('tr');e.innerHTML=`<td colspan="10">${inlineEditorMarkup(m)}</td>`;tbody.appendChild(e);}
+        if(editing){const e=document.createElement('tr');e.innerHTML=`<td colspan="11">${inlineEditorMarkup(m)}</td>`;tbody.appendChild(e);}
       }
       for(const m of kpiMonths){const c=compute(m);totSpend+=c.spend;totSaved+=c.totalSaved;}
       $('#kpiSpend').textContent=fmt.format(clampMoney(totSpend)); $('#kpiDelta').textContent=fmt.format(clampMoney(totSaved)); $('#kpiMonths').textContent=String(kpiMonths.length);
@@ -1794,7 +1814,7 @@
       const today=localDateId();
       if(today.slice(0,7)===id) return today;
       const [y,m]=id.split('-').map(Number);
-      return `${id}-${pad2(new Date(y,m,0).getDate())}`;
+      return id < today.slice(0,7) ? `${id}-${pad2(new Date(y,m,0).getDate())}` : `${id}-01`;
     }
     function openCheckpointEditor(id,date=''){
       const month=state.months.find(m=>m.id===id); if(!month) return;
@@ -1808,6 +1828,7 @@
       $('#checkpointBalance').value=cp?fmt.format(cp.balance):'';
       $('#checkpointErrors').classList.remove('show');
       setDialogOpen($('#checkpointDlg'),true);
+      if(!cp) setTimeout(()=>$('#checkpointBalance').focus(),120);
     }
 
     function wire(){
@@ -2125,6 +2146,10 @@
           const goal=savingsGoalProgress({id:'2025-01',start:100,end:150,tOut:0,savingsGoal:75,checkpoints:[]});
           check('Savings goal calculation',goal.saved===50);
           check('Goal exceeded calculation',goal.difference===-25 && savingsGoalProgress({id:'2025-01',start:100,end:190,tOut:0,savingsGoal:75,checkpoints:[]}).difference===15);
+          check('Target balance derivation',getTargetBalance({start:5000,savingsGoal:2500})===7500 && getTargetBalance({start:5000,savingsGoal:0})===null);
+          const currentId=localDateId().slice(0,7), currentDate=localDateId();
+          check('Current checkpoint authority',getEffectiveEndBalance({id:currentId,end:5100,checkpoints:[{date:currentDate,balance:6200}]})===6200);
+          check('Current checkpoint date default',defaultCheckpointDate(currentId)===currentDate);
           check('Month ID validation',isValidMonthId('2026-12')&&!isValidMonthId('2026-13')&&!isValidMonthId('2026-00'));
           const cps=normalizeCheckpoints([{date:'2026-01-05',balance:80},{date:'bad',balance:9},{date:'2026-01-01',balance:100},{date:'2026-01-05',balance:90}]);
           check('Checkpoint sorting',cps[0]?.date==='2026-01-01'); check('Duplicate replacement',cps[1]?.balance===90); check('Invalid checkpoint rejection',cps.length===2);
