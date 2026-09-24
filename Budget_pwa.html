@@ -240,8 +240,14 @@
     td.checkpointTableCell { padding:0 14px 8px; text-align:left; white-space:normal; }
 
     /* Chart */
-    .chart-container { background: var(--panel); border-radius: var(--radius); padding: 16px 8px; margin-bottom: 24px; position: relative; }
+    .chart-container { background: var(--panel); border-radius: var(--radius); padding: 14px 8px 12px; margin-bottom: 24px; position: relative; overflow:hidden; }
     #chart { display: block; width: 100%; height: auto; }
+    .chart-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:0 8px 12px; }
+    .chart-heading h3 { margin:0; font-size:18px; line-height:1.2; }
+    .chart-period { color:var(--muted); font-size:13px; margin-top:3px; }
+    .chart-latest { text-align:right; min-width:0; }
+    .chart-latest-value { font-size:18px; font-weight:750; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .chart-latest-label { color:var(--muted); font-size:11px; }
     .chart-actions {
       display: flex;
       justify-content: flex-end;
@@ -261,7 +267,7 @@
       gap: 6px;
     }
     .chart-expand-btn:active { opacity: 0.75; }
-    .legend { display: flex; gap: 16px; justify-content: center; font-size: 12px; color: var(--muted); margin-bottom: 16px; flex-wrap: wrap; }
+    .legend { display: flex; gap: 10px 16px; justify-content: center; font-size: 12px; color: var(--muted); margin:0 4px 8px; flex-wrap: wrap; }
     .key { display: flex; align-items: center; gap: 6px; }
     .swatch { width: 10px; height: 10px; border-radius: 50%; }
     .swatch.end { background: var(--acc); }
@@ -447,11 +453,29 @@
       color: var(--text);
       display: none;
       min-width: 140px;
+      max-width:calc(100vw - 20px);
     }
     .tooltip.show { display: block; }
     .tooltip .t { font-weight: 700; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
     .tooltip .l { color: var(--muted); display: flex; justify-content: space-between; margin-bottom: 4px; }
     .tooltip .mono { color: var(--text); margin-left: 12px; }
+    .tooltip .change-positive { color:var(--good); }
+    .tooltip .change-negative { color:var(--bad); }
+    #chart, #chartFullscreen { touch-action:pan-y; }
+    .chart-empty-title { font-weight:700; fill:var(--text); }
+
+    @media (max-width: 430px) {
+      .wrap { padding-left:10px; padding-right:10px; }
+      .chart-container { margin-left:-2px; margin-right:-2px; padding-left:4px; padding-right:4px; }
+      .chart-presets { flex-wrap:nowrap; justify-content:flex-start; overflow-x:auto; padding:0 4px 4px; scrollbar-width:none; scroll-snap-type:x proximity; }
+      .chart-presets::-webkit-scrollbar { display:none; }
+      .chart-preset { flex:0 0 auto; min-width:78px; min-height:44px; scroll-snap-align:start; }
+      .chart-type-btn { min-height:38px; }
+      .chart-heading { padding-left:6px; padding-right:6px; }
+      .chart-actions { margin-right:6px; }
+      .compareGrid { grid-template-columns:1fr; }
+      .legend { font-size:12px; }
+    }
 
     .chart-fs-overlay[hidden] { display: none; }
     .chart-fs-overlay {
@@ -691,6 +715,10 @@
     <section style="margin-top: 32px">
       <h2>Trends</h2>
       <div class="chart-container" id="chartBox">
+        <div class="chart-heading">
+          <div><h3>Balance Trend</h3><div class="chart-period" id="chartPeriod">Last 12 Months</div></div>
+          <div class="chart-latest" id="chartLatest" hidden><div class="chart-latest-value" id="chartLatestValue"></div><div class="chart-latest-label">Latest balance</div></div>
+        </div>
         <div class="chart-presets" id="chartPresets">
           <button class="chart-preset" type="button" data-range="5Y">5 Years</button>
           <button class="chart-preset" type="button" data-range="YTD">YTD</button>
@@ -802,7 +830,7 @@
   </div>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
-  <div class="tooltip" id="tooltip"></div>
+  <div class="tooltip" id="tooltip" role="status" aria-live="polite"></div>
   <div class="chart-fs-overlay" id="chartFullscreenOverlay" hidden aria-hidden="true">
     <div class="chart-fs-shell">
       <div class="chart-fs-head">
@@ -1540,11 +1568,93 @@
       return nodes.box.clientWidth || Math.max(320, window.innerWidth - 32);
     }
     function resolveChartHeight(nodes){
-      if(!nodes.fullscreen) return 240;
+      if(!nodes.fullscreen) return Math.max(220, Math.min(280, Math.round(resolveChartWidth(nodes) * .68)));
       const isLandscape = window.matchMedia('(orientation: landscape)').matches;
       const chromeOffset = isLandscape ? 92 : 156;
       const available = Math.floor(window.innerHeight - chromeOffset);
       return Math.max(isLandscape ? 220 : 280, Math.min(620, available));
+    }
+    function compactCurrency(value){
+      const n=Number(value);
+      if(!Number.isFinite(n)) return '—';
+      const abs=Math.abs(n);
+      if(abs < 1000) return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n);
+      const units=abs >= 1000000 ? ['M',1000000] : ['K',1000];
+      const scaled=n/units[1];
+      return `${scaled < 0 ? '-' : ''}$${Math.abs(scaled).toFixed(Math.abs(scaled)<10?1:0).replace(/\.0$/,'')}${units[0]}`;
+    }
+    function paddedDomain(values){
+      const finite=values.filter(Number.isFinite);
+      if(!finite.length) return [0,1];
+      let min=Math.min(...finite), max=Math.max(...finite);
+      const magnitude=Math.max(Math.abs(min),Math.abs(max),1);
+      const span=max-min;
+      const padding=Math.max(span*.12,magnitude*.04,1);
+      if(span===0){ min-=padding; max+=padding; }
+      else { min-=padding; max+=padding; }
+      if(min>0 && min < magnitude*.08) min=0;
+      if(max<0 && Math.abs(max)<magnitude*.08) max=0;
+      return [min,max];
+    }
+    function chartPeriodLabel(months){
+      const range=state.ui.chartRange||'L12';
+      if(range==='MON') return displayMonth(state.ui.chartMonth||getDefaultTrendMonth());
+      if(range==='QTR') return quarterLabel(state.ui.chartQuarter);
+      if(range==='YTD') return 'Year to date';
+      if(range==='L6') return 'Last 6 months';
+      if(range==='L12') return 'Last 12 months';
+      if(range==='5Y') return 'Last 5 years';
+      return months.length ? `${displayMonth(months[0].id)} – ${displayMonth(months[months.length-1].id)}` : 'No period selected';
+    }
+    function renderMonthlyBalanceTrend(nodes, month, W, H, make){
+      const svg=nodes.svg;
+      const updates=getCheckpointChanges(month);
+      const [year,monthNumber]=month.id.split('-').map(Number);
+      const lastDay=new Date(year,monthNumber,0).getDate();
+      const points=[{date:`${month.id}-01`,balance:month.start,kind:'start',label:'Start'}];
+      updates.forEach(cp=>points.push({...cp,kind:'update'}));
+      if(hasEndBalance(month)){
+        const endDate=`${month.id}-${pad2(lastDay)}`;
+        if(points[points.length-1]?.date===endDate) points[points.length-1]={...points[points.length-1],balance:month.end,kind:'end',label:'End'};
+        else points.push({date:endDate,balance:month.end,kind:'end',label:'End',change:clampMoney(month.end-points[points.length-1].balance)});
+      }
+      const target=getTargetBalance(month);
+      const padL=W<360?42:48, padR=10, padT=16, padB=38;
+      const innerW=W-padL-padR, innerH=H-padT-padB;
+      const [min,max]=paddedDomain(points.map(p=>p.balance).concat(Number.isFinite(target)?[target]:[]));
+      const day=p=>Number(p.date.slice(8,10));
+      const x=p=>padL+((day(p)-1)/Math.max(lastDay-1,1))*innerW;
+      const y=v=>padT+innerH-((v-min)/(max-min))*innerH;
+      [0,.5,1].forEach(ratio=>{
+        const yy=padT+innerH-ratio*innerH;
+        svg.appendChild(make('line',{x1:padL,y1:yy,x2:padL+innerW,y2:yy,stroke:'var(--border)'}));
+        const label=make('text',{x:padL-6,y:yy+4,'text-anchor':'end',fill:'var(--muted)','font-size':W<350?'10':'11'});
+        label.textContent=compactCurrency(min+(max-min)*ratio); svg.appendChild(label);
+      });
+      if(Number.isFinite(target)){
+        svg.appendChild(make('line',{x1:padL,y1:y(target),x2:padL+innerW,y2:y(target),stroke:'var(--warn)','stroke-width':'2','stroke-dasharray':'6 5'}));
+      }
+      const path=points.map((p,i)=>`${i?'L':'M'} ${x(p)} ${y(p.balance)}`).join(' ');
+      svg.appendChild(make('path',{d:path,fill:'none',stroke:'var(--acc)','stroke-width':'3','stroke-linecap':'round','stroke-linejoin':'round'}));
+      const maxLabels=W<350?3:W<430?4:5;
+      const tickDays=Array.from(new Set(Array.from({length:maxLabels},(_,i)=>Math.round(1+i*(lastDay-1)/(maxLabels-1)))));
+      const dateShort=new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'});
+      tickDays.forEach((d,i)=>{
+        const xx=padL+((d-1)/Math.max(lastDay-1,1))*innerW;
+        const label=make('text',{x:xx,y:padT+innerH+23,'text-anchor':i===0?'start':i===tickDays.length-1?'end':'middle',fill:'var(--muted)','font-size':'11'});
+        label.textContent=dateShort.format(new Date(year,monthNumber-1,d)); svg.appendChild(label);
+      });
+      points.forEach((p,i)=>{
+        const latest=i===points.length-1;
+        svg.appendChild(make('circle',{cx:x(p),cy:y(p.balance),r:latest?'5':'4',fill:'var(--panel)',stroke:'var(--acc)','stroke-width':latest?'3':'2'}));
+        const hit=make('circle',{cx:x(p),cy:y(p.balance),r:'22',fill:'transparent',tabindex:'0',role:'button','aria-label':`${p.label||'Balance update'} ${p.date}: ${fmt.format(p.balance)}`});
+        const inspect=ev=>{ ev.preventDefault(); showTooltip(ev.clientX||Math.min(window.innerWidth-24,x(p)+24),ev.clientY||120,{trendPoint:p}); };
+        hit.addEventListener('pointerdown',inspect); hit.addEventListener('pointerenter',ev=>{ if(ev.pointerType==='mouse') inspect(ev); }); hit.addEventListener('focus',inspect); svg.appendChild(hit);
+      });
+      nodes.legend.innerHTML=`<span class="key"><span class="swatch end"></span> Balance</span>${Number.isFinite(target)?'<span class="key"><span class="swatch cc" style="width:18px;height:2px;border-radius:0"></span> Target</span>':''}`;
+      nodes.compareMsg.textContent='';
+      nodes.hint.textContent=updates.length?'Tap a point for balance details':'Add a balance update to start tracking your trend.';
+      return points;
     }
     function renderChart(){
       const nodes = getActiveChartNodes();
@@ -1558,7 +1668,13 @@
       const H = resolveChartHeight(nodes);
       svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
       svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      svg.setAttribute('aria-label', `Balance trend for ${chartPeriodLabel(months)}. Tap or focus a point for details.`);
       svg.innerHTML = '';
+      const periodNode=$('#chartPeriod');
+      if(periodNode) periodNode.textContent=chartPeriodLabel(months);
+      const latestWrap=$('#chartLatest'), latestValue=$('#chartLatestValue');
+      const latestMonth=[...months].reverse().find(m=>!m.missing && getEffectiveBalance(m)!=null);
+      if(latestWrap){ latestWrap.hidden=!latestMonth; if(latestMonth) latestValue.textContent=fmt.format(getEffectiveBalance(latestMonth)); }
 
       if(months.length === 0){
         svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="var(--muted)" font-size="14">No data available to chart.</text>`;
@@ -1576,6 +1692,23 @@
       const innerH = H - padT - padB;
       const axisEdgeInset = Math.max(12, Math.min(nodes.fullscreen ? 28 : 16, innerW * (nodes.fullscreen ? 0.07 : 0.04)));
 
+      const make = (tag, attrs) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        for(const [k,v] of Object.entries(attrs)) el.setAttribute(k, v);
+        return el;
+      };
+
+      if(!compareActive && state.ui.chartRange === 'MON'){
+        const month=months.find(m=>!m.missing);
+        if(!month){
+          svg.innerHTML=`<text x="${W/2}" y="${H/2-8}" text-anchor="middle" class="chart-empty-title" font-size="14">No balance data for this month</text><text x="${W/2}" y="${H/2+18}" text-anchor="middle" fill="var(--muted)" font-size="12">Add a month to begin tracking.</text>`;
+          nodes.legend.innerHTML=''; nodes.hint.textContent=''; return;
+        }
+        const points=renderMonthlyBalanceTrend(nodes,month,W,H,make);
+        if(latestWrap){ latestWrap.hidden=false; latestValue.textContent=fmt.format(points[points.length-1].balance); }
+        return;
+      }
+
       if(compareActive){
         const labels = comparePayload.labels;
         const pVals = comparePayload.primaryValues;
@@ -1588,16 +1721,11 @@
           return padL + axisEdgeInset + (i/(labels.length-1))*(innerW - axisEdgeInset * 2);
         };
         const y = v => padT + innerH - ((v - min) / (max - min || 1)) * innerH;
-        const make = (tag, attrs) => {
-          const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
-          for(const [k,v] of Object.entries(attrs)) el.setAttribute(k, v);
-          return el;
-        };
         [0,0.5,1].forEach(ratio => {
           const yy = padT + innerH - ratio * innerH;
           svg.appendChild(make('line',{x1:padL,y1:yy,x2:padL+innerW,y2:yy, stroke:'var(--border)'}));
           const val = min + (max - min) * ratio;
-          svg.appendChild(make('text',{x: padL - 6, y: yy + 4, 'text-anchor':'end', fill:'var(--muted)', 'font-size':'10'})).textContent = fmt.format(val);
+          svg.appendChild(make('text',{x: padL - 6, y: yy + 4, 'text-anchor':'end', fill:'var(--muted)', 'font-size':'10'})).textContent = compactCurrency(val);
         });
         svg.appendChild(make('line',{x1:padL,y1:padT,x2:padL,y2:padT+innerH, stroke:'var(--border)'}));
         svg.appendChild(make('text',{x: padL, y: 14, fill:'var(--muted)', 'font-size':'10'})).textContent = 'USD';
@@ -1679,12 +1807,6 @@
         return (range === '5Y' || range === 'L12' || range === 'YTD' || range === 'MON') ? monthFmtLong.format(d) : monthFmtShort.format(d);
       };
 
-      const make = (tag, attrs) => {
-        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
-        for(const [k,v] of Object.entries(attrs)) el.setAttribute(k, v);
-        return el;
-      };
-
       // Gridlines + both Y axes
       const yTicks = [0, 0.5, 1];
       yTicks.forEach(ratio => {
@@ -1694,10 +1816,10 @@
         const ccVal = ccMax * ratio;
         svg.appendChild(make('text',{
           x: padL - 6, y: yy + 4, 'text-anchor':'end', fill:'var(--muted)', 'font-size':'10'
-        })).textContent = fmt.format(endVal);
+        })).textContent = compactCurrency(endVal);
         svg.appendChild(make('text',{
           x: padL + innerW + 6, y: yy + 4, 'text-anchor':'start', fill:'var(--muted)', 'font-size':'10'
-        })).textContent = fmt.format(ccVal);
+        })).textContent = compactCurrency(ccVal);
       });
       svg.appendChild(make('line',{x1:padL,y1:padT,x2:padL,y2:padT+innerH, stroke:'var(--border)'}));
       svg.appendChild(make('line',{x1:padL+innerW,y1:padT,x2:padL+innerW,y2:padT+innerH, stroke:'var(--border)'}));
@@ -1810,7 +1932,16 @@
     function showTooltip(x, y, data){
       const t = $('#tooltip');
       t.classList.add('show');
-      if(data.compare){
+      if(data.trendPoint){
+        const p=data.trendPoint;
+        const date=new Date(`${p.date}T12:00:00`);
+        const title=p.kind==='start'
+          ? `${new Intl.DateTimeFormat('en-US',{month:'short',year:'numeric'}).format(date)} · Start`
+          : `${new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric'}).format(date)}${p.kind==='end'?' · End':''}`;
+        const change=state.ui.showBalanceChange && p.kind!=='start' && Number.isFinite(p.change)
+          ? `<div class="l">Change <span class="mono ${p.change>0?'change-positive':p.change<0?'change-negative':''}">${fmtBalanceChange(p.change)}</span></div>` : '';
+        t.innerHTML=`<div class="t">${title}</div><div class="l">Balance <span class="mono">${fmt.format(p.balance)}</span></div>${change}`;
+      } else if(data.compare){
         const pVal = Number.isFinite(data.primaryValue) ? fmt.format(data.primaryValue) : 'No data';
         const sVal = Number.isFinite(data.secondaryValue) ? fmt.format(data.secondaryValue) : 'No data';
         t.innerHTML = `
@@ -1828,12 +1959,14 @@
       }
       
       // Smart positioning: Keep inside viewport
-      let newX = x + 15;
-      let newY = y + 15;
+      let newX = Math.max(10, x + 15);
+      let newY = Math.max(10, y + 15);
       const rect = t.getBoundingClientRect();
       
       if(newX + rect.width > window.innerWidth - 10) newX = window.innerWidth - rect.width - 10;
       if(newY + rect.height > window.innerHeight - 10) newY = window.innerHeight - rect.height - 10;
+      newX = Math.max(10, newX);
+      newY = Math.max(10, newY);
       
       t.style.left = newX + 'px';
       t.style.top = newY + 'px';
@@ -2288,6 +2421,11 @@
           check('Start balance change recalculation',getCheckpointChanges({start:950,checkpoints:[{date:'2026-09-21',balance:1000},{date:'2026-09-22',balance:800}]})[0]?.change===50);
           check('Legacy checkpoint derivation',getCheckpointChanges(normalizeMonthRecord({id:'2026-09',start:900,end:null,checkpoints:[{date:'2026-09-21',balance:1000}]}))[0]?.change===100);
           check('Signed change formatting',fmtBalanceChange(1250)==='+$1,250.00'&&fmtBalanceChange(-45.25)==='-$45.25');
+          check('Compact chart currency',compactCurrency(800)==='$800'&&compactCurrency(1500)==='$1.5K'&&compactCurrency(-25000)==='-$25K');
+          const flatDomain=paddedDomain([1000,1000]);
+          const mixedDomain=paddedDomain([-200,1500]);
+          check('Chart domain handles identical values',flatDomain[0]<1000&&flatDomain[1]>1000);
+          check('Chart domain handles negative values',mixedDomain[0]<-200&&mixedDomain[1]>1500);
           const checkpointFixture={id:'2026-09',start:900,checkpoints:[{date:'2026-09-21',balance:1000},{date:'2026-09-23',balance:1500}]};
           const oldVisibility=state.ui.showBalanceChange, oldMenu=openCheckpointMenu, fixtureWasExpanded=expandedCheckpointMonths.has(checkpointFixture.id);
           expandedCheckpointMonths.add(checkpointFixture.id);
