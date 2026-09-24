@@ -203,13 +203,33 @@
     .checkpointDisclosure { margin-top:8px; border-top:1px solid var(--border); }
     .checkpointToggle { width:100%; min-height:44px; padding:6px 0; border:0; background:transparent; color:var(--acc); display:flex; align-items:center; justify-content:space-between; font-weight:600; font-size:13px; }
     .checkpointPanel { padding:2px 0 6px; }
-    .checkpointRow { display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:5px; min-height:44px; border-top:1px solid rgba(255,255,255,.08); font-size:13px; }
+    .checkpointToolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:2px 0 8px; }
+    .checkpointPreference { display:flex; align-items:center; justify-content:flex-end; gap:8px; min-width:0; color:var(--muted); font-size:12px; font-weight:600; cursor:pointer; }
+    .checkpointPreference span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .switch { position:relative; width:42px; height:26px; flex:0 0 42px; }
+    .switch input { position:absolute; width:1px; height:1px; opacity:0; }
+    .switchTrack { position:absolute; inset:0; border-radius:999px; background:var(--panel2); border:1px solid var(--border); transition:background .2s,border-color .2s; }
+    .switchTrack::after { content:""; position:absolute; width:20px; height:20px; top:2px; left:2px; border-radius:50%; background:var(--text); box-shadow:0 1px 3px rgba(0,0,0,.4); transition:transform .2s; }
+    .switch input:checked + .switchTrack { background:var(--acc); border-color:var(--acc); }
+    .switch input:checked + .switchTrack::after { transform:translateX(16px); }
+    .switch input:focus-visible + .switchTrack { outline:2px solid var(--text); outline-offset:2px; }
+    .checkpointRow { display:grid; grid-template-columns:minmax(0,1fr) auto 44px; align-items:center; gap:6px; min-height:48px; border-top:1px solid rgba(255,255,255,.08); font-size:13px; }
     .checkpointValues { text-align:right; font-variant-numeric:tabular-nums; }
     .checkpointValues .amount { font-weight:600; }
     .checkpointChange { display:block; margin-top:1px; color:var(--muted); font-size:12px; font-weight:600; }
     .checkpointChange.good { color:var(--good); }
     .checkpointChange.bad { color:var(--bad); }
     .checkpointRow .btn { min-width:40px; min-height:40px; }
+    .checkpointActions { position:relative; justify-self:end; }
+    .checkpointMenu { position:absolute; z-index:20; top:calc(100% - 2px); right:0; width:132px; padding:4px; border:1px solid var(--border); border-radius:10px; background:var(--panel2); box-shadow:var(--shadow); }
+    .checkpointMenu .btn { width:100%; min-height:44px; padding:8px 12px; justify-content:flex-start; border-radius:7px; background:transparent; color:var(--text); }
+    .checkpointMenu .btn.danger { color:var(--bad); }
+
+    @media (max-width: 380px) {
+      .checkpointToolbar { align-items:stretch; flex-direction:column; }
+      .checkpointToolbar > .btn { align-self:flex-start; }
+      .checkpointPreference { justify-content:space-between; min-height:36px; }
+    }
 
     /* Desktop Table (Hidden on small screens) */
     .table-container { display: none; overflow-x: auto; margin-top: 16px; background: var(--panel); border-radius: var(--radius); }
@@ -217,6 +237,7 @@
     th, td { padding: 14px; text-align: right; border-bottom: 1px solid var(--border); font-size: 14px; white-space: nowrap; }
     th:first-child, td:first-child { text-align: left; }
     th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+    td.checkpointTableCell { padding:0 14px 8px; text-align:left; white-space:normal; }
 
     /* Chart */
     .chart-container { background: var(--panel); border-radius: var(--radius); padding: 16px 8px; margin-bottom: 24px; position: relative; }
@@ -1012,7 +1033,8 @@
           compareSecondaryYear:'',
           comparePrimaryQuarter:'',
           compareSecondaryQuarter:'',
-          chartType:'LINE'
+          chartType:'LINE',
+          showBalanceChange:true
         };
         if(!raw) return {months:[], ui:defaultUi};
         const parsed = JSON.parse(raw);
@@ -1025,7 +1047,7 @@
       } catch(e) {
         return {
           months:[],
-          ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12', chartMonth:'', compareOn:false, chartType:'LINE'}
+          ui:{filterYear:'ALL', sort:'DESC', chartRange:'L12', chartMonth:'', compareOn:false, chartType:'LINE', showBalanceChange:true}
         };
       }
     }
@@ -1379,9 +1401,12 @@
       const rows = getCheckpointChanges(m).map(cp=>{
         const changeClass = cp.change > 0 ? 'good' : cp.change < 0 ? 'bad' : '';
         const dateLabel = new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'}).format(new Date(...cp.date.split('-').map((v,i)=>Number(v)-(i===1?1:0))));
-        return `<div class="checkpointRow"><span>${dateLabel}</span><span class="checkpointValues"><span class="amount">${fmt.format(cp.balance)}</span><span class="checkpointChange ${changeClass}" aria-label="Change from previous balance: ${fmtBalanceChange(cp.change)}">${fmtBalanceChange(cp.change)}</span></span><span><button class="btn iconbtn" data-act="checkpoint-edit" data-id="${m.id}" data-date="${cp.date}" aria-label="Edit balance update from ${cp.date}">✏️</button><button class="btn iconbtn danger" data-act="checkpoint-delete" data-id="${m.id}" data-date="${cp.date}" aria-label="Delete balance update from ${cp.date}">🗑️</button></span></div>`;
+        const menuOpen = openCheckpointMenu === `${m.id}:${cp.date}`;
+        const change = state.ui.showBalanceChange ? `<span class="checkpointChange ${changeClass}" aria-label="Change from previous balance: ${fmtBalanceChange(cp.change)}">${fmtBalanceChange(cp.change)}</span>` : '';
+        return `<div class="checkpointRow"><span>${dateLabel}</span><span class="checkpointValues"><span class="amount">${fmt.format(cp.balance)}</span>${change}</span><div class="checkpointActions"><button class="btn iconbtn" type="button" data-act="checkpoint-menu" data-id="${m.id}" data-date="${cp.date}" aria-label="More actions for balance update from ${cp.date}" aria-haspopup="menu" aria-expanded="${menuOpen}">•••</button>${menuOpen?`<div class="checkpointMenu" role="menu"><button class="btn" type="button" role="menuitem" data-act="checkpoint-edit" data-id="${m.id}" data-date="${cp.date}">Edit</button><button class="btn danger" type="button" role="menuitem" data-act="checkpoint-delete" data-id="${m.id}" data-date="${cp.date}">Delete</button></div>`:''}</div></div>`;
       }).join('');
-      return `<div class="checkpointDisclosure"><button class="checkpointToggle" type="button" data-act="checkpoint-toggle" data-id="${m.id}" aria-expanded="${open}"><span>Balance Updates (${m.checkpoints.length})</span><span>${open?'⌄':'›'}</span></button>${open?`<div class="checkpointPanel"><button class="btn small" type="button" data-act="checkpoint-add" data-id="${m.id}">+ Add Balance Update</button>${rows || '<div class="hint">No balance updates yet.</div>'}</div>`:''}</div>`;
+      const preference = `<label class="checkpointPreference"><span>Show Balance Change</span><span class="switch"><input type="checkbox" data-act="checkpoint-change-visibility" aria-label="Show balance change" ${state.ui.showBalanceChange?'checked':''}><span class="switchTrack" aria-hidden="true"></span></span></label>`;
+      return `<div class="checkpointDisclosure"><button class="checkpointToggle" type="button" data-act="checkpoint-toggle" data-id="${m.id}" aria-expanded="${open}"><span>Balance Updates (${m.checkpoints.length})</span><span>${open?'⌄':'›'}</span></button>${open?`<div class="checkpointPanel"><div class="checkpointToolbar"><button class="btn small" type="button" data-act="checkpoint-add" data-id="${m.id}">+ Add Balance Update</button>${preference}</div>${rows || '<div class="hint">No balance updates yet.</div>'}</div>`:''}</div>`;
     }
     function renderMonths(){
       const months = filterMonths(), kpiMonths = getChartMonths().filter(m=>!m.missing);
@@ -1399,6 +1424,9 @@
         const tr=document.createElement('tr');
         tr.innerHTML=`<td><b>${displayMonth(m.id)}</b></td><td>${fmt.format(m.start)}</td><td>${target==null?'—':fmt.format(target)}</td><td>${effective==null?'Not updated':fmt.format(effective)}</td><td class="${c.delta == null?'':c.delta<0?'bad':'good'}">${c.delta == null?'—':fmt.format(c.delta)}</td><td>${fmt.format(m.tOut)}</td><td style="color:${savedClass}">${fmtSignedCurrency(currentSaved)}</td><td>${m.savingsGoal?fmt.format(m.savingsGoal):'—'}</td><td style="font-weight:700">${fmt.format(c.spend)}</td><td>${fmt.format(m.cc)}</td><td style="text-align:center"><button class="btn iconbtn" data-act="inline-edit" data-id="${m.id}" aria-label="Edit">✏️</button><button class="btn iconbtn danger" data-act="del" data-id="${m.id}" aria-label="Delete">🗑️</button></td>`;
         tbody.appendChild(tr);
+        const checkpointRow=document.createElement('tr');
+        checkpointRow.innerHTML=`<td colspan="11" class="checkpointTableCell">${checkpointsMarkup(m)}</td>`;
+        tbody.appendChild(checkpointRow);
         if(editing){const e=document.createElement('tr');e.innerHTML=`<td colspan="11">${inlineEditorMarkup(m)}</td>`;tbody.appendChild(e);}
       }
       for(const m of kpiMonths){const c=compute(m);totSpend+=c.spend;totSaved+=c.totalSaved;}
@@ -1839,6 +1867,7 @@
     let editingId = null;
     let inlineEditingId = null;
     const expandedCheckpointMonths = new Set();
+    let openCheckpointMenu = null;
     let checkpointEditing = null;
     function setEditingState(id){
       editingId = id || null;
@@ -2080,13 +2109,29 @@
           toast('Month updated.');
         }
         if(act === 'checkpoint-toggle'){
+          openCheckpointMenu = null;
           expandedCheckpointMonths.has(id)?expandedCheckpointMonths.delete(id):expandedCheckpointMonths.add(id);
           renderMonths();
         }
+        if(act === 'checkpoint-change-visibility'){
+          state.ui.showBalanceChange = !!btn.checked;
+          openCheckpointMenu = null;
+          saveState(); renderMonths();
+        }
+        if(act === 'checkpoint-menu'){
+          const menuKey = `${id}:${btn.dataset.date}`;
+          openCheckpointMenu = openCheckpointMenu === menuKey ? null : menuKey;
+          renderMonths();
+        }
         if(act === 'checkpoint-add') openCheckpointEditor(id);
-        if(act === 'checkpoint-edit') openCheckpointEditor(id,btn.dataset.date);
+        if(act === 'checkpoint-edit'){
+          const date=btn.dataset.date;
+          openCheckpointMenu=null; renderMonths();
+          openCheckpointEditor(id,date);
+        }
         if(act === 'checkpoint-delete'){
           const date=btn.dataset.date;
+          openCheckpointMenu=null; renderMonths();
           const label=new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'}).format(new Date(...date.split('-').map((v,i)=>Number(v)-(i===1?1:0))));
           if(confirm(`Delete balance update from ${label}?`)){
             const month=state.months.find(m=>m.id===id);
@@ -2104,6 +2149,18 @@
       };
       $('#monthsTable').addEventListener('click', handleAction);
       $('#monthCards').addEventListener('click', handleAction);
+      document.addEventListener('click',ev=>{
+        if(openCheckpointMenu && !ev.target.closest('.checkpointActions')){
+          openCheckpointMenu=null;
+          renderMonths();
+        }
+      });
+      document.addEventListener('keydown',ev=>{
+        if(ev.key === 'Escape' && openCheckpointMenu){
+          openCheckpointMenu=null;
+          renderMonths();
+        }
+      });
 
       $('#closeCheckpoint').addEventListener('click',()=>setDialogOpen($('#checkpointDlg'),false));
       $('#cancelCheckpoint').addEventListener('click',()=>setDialogOpen($('#checkpointDlg'),false));
@@ -2226,9 +2283,25 @@
           check('Backdated checkpoint recalculation',backdatedChanges.map(cp=>cp.change).join(',')==='100,-200,700');
           const movedChanges=getCheckpointChanges({start:900,checkpoints:[{date:'2026-09-20',balance:800},{date:'2026-09-21',balance:1000},{date:'2026-09-23',balance:1500}]});
           check('Edited checkpoint date recalculation',movedChanges.map(cp=>cp.change).join(',')==='-100,200,500');
+          const deletedChanges=getCheckpointChanges({start:900,checkpoints:[{date:'2026-09-21',balance:1000},{date:'2026-09-23',balance:1500}]});
+          check('Deleted checkpoint recalculation',deletedChanges.map(cp=>cp.change).join(',')==='100,500');
           check('Start balance change recalculation',getCheckpointChanges({start:950,checkpoints:[{date:'2026-09-21',balance:1000},{date:'2026-09-22',balance:800}]})[0]?.change===50);
           check('Legacy checkpoint derivation',getCheckpointChanges(normalizeMonthRecord({id:'2026-09',start:900,end:null,checkpoints:[{date:'2026-09-21',balance:1000}]}))[0]?.change===100);
           check('Signed change formatting',fmtBalanceChange(1250)==='+$1,250.00'&&fmtBalanceChange(-45.25)==='-$45.25');
+          const checkpointFixture={id:'2026-09',start:900,checkpoints:[{date:'2026-09-21',balance:1000},{date:'2026-09-23',balance:1500}]};
+          const oldVisibility=state.ui.showBalanceChange, oldMenu=openCheckpointMenu, fixtureWasExpanded=expandedCheckpointMonths.has(checkpointFixture.id);
+          expandedCheckpointMonths.add(checkpointFixture.id);
+          state.ui.showBalanceChange=true; openCheckpointMenu=null;
+          const visibleCheckpointMarkup=checkpointsMarkup(checkpointFixture);
+          state.ui.showBalanceChange=false;
+          const hiddenCheckpointMarkup=checkpointsMarkup(checkpointFixture);
+          check('Balance change visibility toggle',visibleCheckpointMarkup.includes('+$100.00')&&!hiddenCheckpointMarkup.includes('+$100.00')&&hiddenCheckpointMarkup.includes('$1,000.00'));
+          state.ui.showBalanceChange=true; openCheckpointMenu='2026-09:2026-09-21';
+          const menuMarkup=checkpointsMarkup(checkpointFixture);
+          check('Checkpoint action menu',menuMarkup.includes('role="menuitem"')&&menuMarkup.includes('>Edit<')&&menuMarkup.includes('>Delete<')&&(menuMarkup.match(/class="checkpointMenu"/g)||[]).length===1);
+          check('Balance change preference serialization',JSON.parse(JSON.stringify({ui:{showBalanceChange:false}})).ui.showBalanceChange===false);
+          if(!fixtureWasExpanded) expandedCheckpointMonths.delete(checkpointFixture.id);
+          state.ui.showBalanceChange=oldVisibility; openCheckpointMenu=oldMenu;
           const old=state; state={months:[{id:'2026-01',start:1,end:1,cc:0,tOut:0,savingsGoal:0,checkpoints:[]},{id:'2026-09',start:1,end:1,cc:0,tOut:0,savingsGoal:0,checkpoints:[]}],ui:{chartRange:'L6'}};
           const range=getChartMonths(); check('Calendar ranges',range.map(m=>m.id).join(',')==='2026-04,2026-05,2026-06,2026-07,2026-08,2026-09'); state=old;
           check('Quarter calculation',quarterIdFromMonthId('2026-09')==='2026-Q3');
