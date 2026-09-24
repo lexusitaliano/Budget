@@ -204,7 +204,11 @@
     .checkpointToggle { width:100%; min-height:44px; padding:6px 0; border:0; background:transparent; color:var(--acc); display:flex; align-items:center; justify-content:space-between; font-weight:600; font-size:13px; }
     .checkpointPanel { padding:2px 0 6px; }
     .checkpointRow { display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:5px; min-height:44px; border-top:1px solid rgba(255,255,255,.08); font-size:13px; }
-    .checkpointRow .amount { font-variant-numeric:tabular-nums; font-weight:600; }
+    .checkpointValues { text-align:right; font-variant-numeric:tabular-nums; }
+    .checkpointValues .amount { font-weight:600; }
+    .checkpointChange { display:block; margin-top:1px; color:var(--muted); font-size:12px; font-weight:600; }
+    .checkpointChange.good { color:var(--good); }
+    .checkpointChange.bad { color:var(--bad); }
     .checkpointRow .btn { min-width:40px; min-height:40px; }
 
     /* Desktop Table (Hidden on small screens) */
@@ -885,6 +889,11 @@
       const abs = fmt.format(Math.abs(value));
       return value < 0 ? `- ${abs}` : abs;
     }
+    function fmtBalanceChange(n){
+      const value = clampMoney(Number(n));
+      if(!Number.isFinite(value) || value === 0) return fmt.format(0);
+      return `${value > 0 ? '+' : '-'}${fmt.format(Math.abs(value))}`;
+    }
 
     function pad2(n){ return String(n).padStart(2,'0'); }
     function monthId(year, monthIndex0){ return `${year}-${pad2(monthIndex0+1)}`; }
@@ -916,6 +925,14 @@
         if(isValidLocalDateId(date) && date <= localDateId() && Number.isFinite(balance)) byDate.set(date, {date, balance:clampMoney(balance)});
       });
       return Array.from(byDate.values()).sort((a,b)=>a.date.localeCompare(b.date));
+    }
+    function getCheckpointChanges(record){
+      let previousBalance = Number(record?.start);
+      return normalizeCheckpoints(record?.checkpoints).map(checkpoint => {
+        const change = clampMoney(checkpoint.balance - previousBalance);
+        previousBalance = checkpoint.balance;
+        return {...checkpoint, change};
+      });
     }
     function isCurrentMonth(id){ return id === localDateId().slice(0,7); }
     function hasEndBalance(record){ return Number.isFinite(record?.end); }
@@ -1359,7 +1376,11 @@
     }
     function checkpointsMarkup(m){
       const open = expandedCheckpointMonths.has(m.id);
-      const rows = m.checkpoints.map(cp=>`<div class="checkpointRow"><span>${new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'}).format(new Date(...cp.date.split('-').map((v,i)=>Number(v)-(i===1?1:0))))}</span><span class="amount">${fmt.format(cp.balance)}</span><span><button class="btn iconbtn" data-act="checkpoint-edit" data-id="${m.id}" data-date="${cp.date}" aria-label="Edit balance update from ${cp.date}">✏️</button><button class="btn iconbtn danger" data-act="checkpoint-delete" data-id="${m.id}" data-date="${cp.date}" aria-label="Delete balance update from ${cp.date}">🗑️</button></span></div>`).join('');
+      const rows = getCheckpointChanges(m).map(cp=>{
+        const changeClass = cp.change > 0 ? 'good' : cp.change < 0 ? 'bad' : '';
+        const dateLabel = new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'}).format(new Date(...cp.date.split('-').map((v,i)=>Number(v)-(i===1?1:0))));
+        return `<div class="checkpointRow"><span>${dateLabel}</span><span class="checkpointValues"><span class="amount">${fmt.format(cp.balance)}</span><span class="checkpointChange ${changeClass}" aria-label="Change from previous balance: ${fmtBalanceChange(cp.change)}">${fmtBalanceChange(cp.change)}</span></span><span><button class="btn iconbtn" data-act="checkpoint-edit" data-id="${m.id}" data-date="${cp.date}" aria-label="Edit balance update from ${cp.date}">✏️</button><button class="btn iconbtn danger" data-act="checkpoint-delete" data-id="${m.id}" data-date="${cp.date}" aria-label="Delete balance update from ${cp.date}">🗑️</button></span></div>`;
+      }).join('');
       return `<div class="checkpointDisclosure"><button class="checkpointToggle" type="button" data-act="checkpoint-toggle" data-id="${m.id}" aria-expanded="${open}"><span>Balance Updates (${m.checkpoints.length})</span><span>${open?'⌄':'›'}</span></button>${open?`<div class="checkpointPanel"><button class="btn small" type="button" data-act="checkpoint-add" data-id="${m.id}">+ Add Balance Update</button>${rows || '<div class="hint">No balance updates yet.</div>'}</div>`:''}</div>`;
     }
     function renderMonths(){
@@ -2194,6 +2215,20 @@
           check('Month ID validation',isValidMonthId('2026-12')&&!isValidMonthId('2026-13')&&!isValidMonthId('2026-00'));
           const cps=normalizeCheckpoints([{date:'2026-01-05',balance:80},{date:'bad',balance:9},{date:'2026-01-01',balance:100},{date:'2026-01-05',balance:90}]);
           check('Checkpoint sorting',cps[0]?.date==='2026-01-01'); check('Duplicate replacement',cps[1]?.balance===90); check('Invalid checkpoint rejection',cps.length===2);
+          const changes=getCheckpointChanges({start:900,checkpoints:[{date:'2026-09-21',balance:1000},{date:'2026-09-22',balance:800},{date:'2026-09-23',balance:1500}]});
+          check('First checkpoint change uses Start',changes[0]?.change===100);
+          check('Checkpoint decrease',changes[1]?.change===-200);
+          check('Checkpoint increase',changes[2]?.change===700);
+          check('Zero checkpoint change',getCheckpointChanges({start:1000,checkpoints:[{date:'2026-09-21',balance:1000}]})[0]?.change===0 && fmtBalanceChange(0)===fmt.format(0));
+          const editedChanges=getCheckpointChanges({start:900,checkpoints:[{date:'2026-09-21',balance:1000},{date:'2026-09-22',balance:1200},{date:'2026-09-23',balance:1500}]});
+          check('Edited checkpoint recalculation',editedChanges[1]?.change===200&&editedChanges[2]?.change===300);
+          const backdatedChanges=getCheckpointChanges({start:900,checkpoints:[{date:'2026-09-23',balance:1500},{date:'2026-09-21',balance:1000},{date:'2026-09-22',balance:800}]});
+          check('Backdated checkpoint recalculation',backdatedChanges.map(cp=>cp.change).join(',')==='100,-200,700');
+          const movedChanges=getCheckpointChanges({start:900,checkpoints:[{date:'2026-09-20',balance:800},{date:'2026-09-21',balance:1000},{date:'2026-09-23',balance:1500}]});
+          check('Edited checkpoint date recalculation',movedChanges.map(cp=>cp.change).join(',')==='-100,200,500');
+          check('Start balance change recalculation',getCheckpointChanges({start:950,checkpoints:[{date:'2026-09-21',balance:1000},{date:'2026-09-22',balance:800}]})[0]?.change===50);
+          check('Legacy checkpoint derivation',getCheckpointChanges(normalizeMonthRecord({id:'2026-09',start:900,end:null,checkpoints:[{date:'2026-09-21',balance:1000}]}))[0]?.change===100);
+          check('Signed change formatting',fmtBalanceChange(1250)==='+$1,250.00'&&fmtBalanceChange(-45.25)==='-$45.25');
           const old=state; state={months:[{id:'2026-01',start:1,end:1,cc:0,tOut:0,savingsGoal:0,checkpoints:[]},{id:'2026-09',start:1,end:1,cc:0,tOut:0,savingsGoal:0,checkpoints:[]}],ui:{chartRange:'L6'}};
           const range=getChartMonths(); check('Calendar ranges',range.map(m=>m.id).join(',')==='2026-04,2026-05,2026-06,2026-07,2026-08,2026-09'); state=old;
           check('Quarter calculation',quarterIdFromMonthId('2026-09')==='2026-Q3');
