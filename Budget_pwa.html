@@ -224,6 +224,7 @@
     .checkpointMenu { position:absolute; z-index:20; top:calc(100% - 2px); right:0; width:132px; padding:4px; border:1px solid var(--border); border-radius:10px; background:var(--panel2); box-shadow:var(--shadow); }
     .checkpointMenu .btn { width:100%; min-height:44px; padding:8px 12px; justify-content:flex-start; border-radius:7px; background:transparent; color:var(--text); }
     .checkpointMenu .btn.danger { color:var(--bad); }
+    .checkpointTransferAvailable { padding:0 16px 14px; color:var(--muted); font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; }
 
     @media (max-width: 380px) {
       .checkpointToolbar { align-items:stretch; flex-direction:column; }
@@ -913,8 +914,13 @@
       <div class="ios-group">
         <div class="ios-field"><label for="checkpointDate">Date</label><input id="checkpointDate" type="date" required /></div>
         <div class="ios-field"><label for="checkpointBalance">Checking Balance</label><input id="checkpointBalance" type="text" inputmode="decimal" placeholder="$0.00" required /></div>
-        <label class="ios-field" for="checkpointHasTransfer"><span>Includes Transfer Out</span><span class="switch"><input id="checkpointHasTransfer" type="checkbox" /><span class="switchTrack" aria-hidden="true"></span></span></label>
-        <div class="ios-field" id="checkpointTransferField" hidden><label for="checkpointTransfer">Transfer Out Applied</label><input id="checkpointTransfer" type="text" inputmode="decimal" placeholder="$0.00" /><div class="hint" id="checkpointTransferHint"></div></div>
+        <div id="checkpointTransferControls" hidden>
+          <label class="ios-field" for="checkpointHasTransfer"><span>Include Transfer Out</span><span class="switch"><input id="checkpointHasTransfer" type="checkbox" /><span class="switchTrack" aria-hidden="true"></span></span></label>
+          <div id="checkpointTransferField" hidden>
+            <div class="ios-field"><label for="checkpointTransfer">Transfer Out Applied</label><input id="checkpointTransfer" type="text" inputmode="decimal" placeholder="$0.00" /></div>
+            <div class="checkpointTransferAvailable" id="checkpointTransferHint"></div>
+          </div>
+        </div>
       </div>
       <div class="errors" id="checkpointErrors" aria-live="polite"></div>
       <div class="dlgActions"><button class="btn full" type="button" id="cancelCheckpoint">Cancel</button><button class="btn primary full" type="submit">Save</button></div>
@@ -1457,7 +1463,6 @@
     }
     function checkpointsMarkup(m){
       const open = expandedCheckpointMonths.has(m.id);
-      const attribution = getTransferAttribution(m);
       const rows = getCheckpointChanges(m).map(cp=>{
         const changeClass = cp.change > 0 ? 'good' : cp.change < 0 ? 'bad' : '';
         const dateLabel = new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'}).format(new Date(...cp.date.split('-').map((v,i)=>Number(v)-(i===1?1:0))));
@@ -1467,7 +1472,7 @@
         return `<div class="checkpointRow"><span>${dateLabel}</span><span class="checkpointValues"><span class="amount">${fmt.format(cp.balance)}</span>${change}${transfer}</span><div class="checkpointActions"><button class="btn iconbtn" type="button" data-act="checkpoint-menu" data-id="${m.id}" data-date="${cp.date}" aria-label="More actions for balance update from ${cp.date}" aria-haspopup="menu" aria-expanded="${menuOpen}">•••</button>${menuOpen?`<div class="checkpointMenu" role="menu"><button class="btn" type="button" role="menuitem" data-act="checkpoint-edit" data-id="${m.id}" data-date="${cp.date}">Edit</button><button class="btn danger" type="button" role="menuitem" data-act="checkpoint-delete" data-id="${m.id}" data-date="${cp.date}">Delete</button></div>`:''}</div></div>`;
       }).join('');
       const preference = `<label class="checkpointPreference"><span>Show Balance Change</span><span class="switch"><input type="checkbox" data-act="checkpoint-change-visibility" aria-label="Show balance change" ${state.ui.showBalanceChange?'checked':''}><span class="switchTrack" aria-hidden="true"></span></span></label>`;
-      return `<div class="checkpointDisclosure"><button class="checkpointToggle" type="button" data-act="checkpoint-toggle" data-id="${m.id}" aria-expanded="${open}"><span>Balance Updates (${m.checkpoints.length})</span><span>${open?'⌄':'›'}</span></button>${open?`<div class="checkpointPanel"><div class="hint" style="margin-bottom:8px">Transfer Out: ${fmt.format(attribution.total)} · Assigned: ${fmt.format(attribution.assigned)} · Unassigned: ${fmt.format(attribution.remaining)}</div><div class="checkpointToolbar"><button class="btn small" type="button" data-act="checkpoint-add" data-id="${m.id}">+ Add Balance Update</button>${preference}</div>${rows || '<div class="hint">No balance updates yet.</div>'}</div>`:''}</div>`;
+      return `<div class="checkpointDisclosure"><button class="checkpointToggle" type="button" data-act="checkpoint-toggle" data-id="${m.id}" aria-expanded="${open}"><span>Balance Updates (${m.checkpoints.length})</span><span>${open?'⌄':'›'}</span></button>${open?`<div class="checkpointPanel"><div class="checkpointToolbar"><button class="btn small" type="button" data-act="checkpoint-add" data-id="${m.id}">+ Add Balance Update</button>${preference}</div>${rows || '<div class="hint">No balance updates yet.</div>'}</div>`:''}</div>`;
     }
     function renderMonths(){
       const months = filterMonths(), kpiMonths = getChartMonths().filter(m=>!m.missing);
@@ -1480,15 +1485,15 @@
         const currentSaved=savingsGoalProgress(m).saved;
         const savedClass=currentSaved<0?'var(--bad)':currentSaved>0?'var(--good)':'var(--text)';
         const card=document.createElement('div'); card.className='monthCard';
-        card.innerHTML=`<div class="monthCardHeader"><div><div class="monthCardTitle">${displayMonth(m.id)}</div>${balanceSummaryMarkup(m)}<div style="color:${savedClass};font-size:16px;font-weight:600;margin-top:4px">Saved: ${fmtSignedCurrency(currentSaved)}</div></div><div class="row" style="gap:6px"><button class="btn iconbtn" aria-label="Edit" data-act="inline-edit" data-id="${m.id}">✏️</button><button class="btn iconbtn danger" aria-label="Delete" data-act="del" data-id="${m.id}">🗑️</button></div></div><div class="monthCardGrid"><div class="kv"><div class="k">Total Spend</div><div class="v">${fmt.format(c.totalSpend)}</div></div><div class="kv"><div class="k">CC Spend</div><div class="v">${fmt.format(m.cc)}</div></div><div class="kv"><div class="k">Transfers Out</div><div class="v">${fmt.format(m.tOut)}</div></div><div class="kv"><div class="k" title="Detected outflow not attributed to CC Spend">Withdrawals</div><div class="v">${fmt.format(c.withdrawals)}</div></div></div>${goalMarkup(m)}${checkpointsMarkup(m)}${editing?inlineEditorMarkup(m):''}`;
+        card.innerHTML=`<div class="monthCardHeader"><div><div class="monthCardTitle">${displayMonth(m.id)}</div>${balanceSummaryMarkup(m)}<div style="color:${savedClass};font-size:16px;font-weight:600;margin-top:4px">Saved: ${fmtSignedCurrency(currentSaved)}</div></div><div class="row" style="gap:6px"><button class="btn iconbtn" aria-label="Edit" data-act="inline-edit" data-id="${m.id}">✏️</button><button class="btn iconbtn danger" aria-label="Delete" data-act="del" data-id="${m.id}">🗑️</button></div></div><div class="monthCardGrid"><div class="kv"><div class="k">Total Spend</div><div class="v">${fmt.format(c.totalSpend)}</div></div><div class="kv"><div class="k">CC Spend</div><div class="v">${fmt.format(m.cc)}</div></div><div class="kv"><div class="k">Transfers Out</div><div class="v">${fmt.format(m.tOut)}</div></div><div class="kv"><div class="k" title="Detected outflow not attributed to CC Spend">Withdrawals</div><div class="v">${fmt.format(c.withdrawals)}</div></div></div>${goalMarkup(m)}${editing?inlineEditorMarkup(m):''}${checkpointsMarkup(m)}`;
         cards.appendChild(card);
         const tr=document.createElement('tr');
         tr.innerHTML=`<td><b>${displayMonth(m.id)}</b></td><td>${fmt.format(m.start)}</td><td>${target==null?'—':fmt.format(target)}</td><td>${effective==null?'Not updated':fmt.format(effective)}</td><td title="Detected outflow not attributed to CC Spend">${fmt.format(c.withdrawals)}</td><td>${fmt.format(m.tOut)}</td><td style="color:${savedClass}">${fmtSignedCurrency(currentSaved)}</td><td>${m.savingsGoal?fmt.format(m.savingsGoal):'—'}</td><td style="font-weight:700">${fmt.format(c.totalSpend)}</td><td>${fmt.format(m.cc)}</td><td style="text-align:center"><button class="btn iconbtn" data-act="inline-edit" data-id="${m.id}" aria-label="Edit">✏️</button><button class="btn iconbtn danger" data-act="del" data-id="${m.id}" aria-label="Delete">🗑️</button></td>`;
         tbody.appendChild(tr);
+        if(editing){const e=document.createElement('tr');e.innerHTML=`<td colspan="11">${inlineEditorMarkup(m)}</td>`;tbody.appendChild(e);}
         const checkpointRow=document.createElement('tr');
         checkpointRow.innerHTML=`<td colspan="11" class="checkpointTableCell">${checkpointsMarkup(m)}</td>`;
         tbody.appendChild(checkpointRow);
-        if(editing){const e=document.createElement('tr');e.innerHTML=`<td colspan="11">${inlineEditorMarkup(m)}</td>`;tbody.appendChild(e);}
       }
       for(const m of kpiMonths){const c=compute(m);totSpend+=c.totalSpend;totSaved+=c.totalSaved;}
       $('#kpiSpend').textContent=fmt.format(clampMoney(totSpend)); $('#kpiDelta').textContent=fmt.format(clampMoney(totSaved)); $('#kpiMonths').textContent=String(kpiMonths.length);
@@ -2083,9 +2088,12 @@
       const month=state.months.find(m=>m.id===checkpointEditing.id);
       const current=month?.checkpoints.find(cp=>cp.date===checkpointEditing.originalDate);
       const available=clampMoney(getTransferAttribution(month).remaining + (Number(current?.transferApplied)||0));
+      const hasTransferOut=getTransferOutTotal(month)>0;
+      $('#checkpointTransferControls').hidden=!hasTransferOut;
+      if(!hasTransferOut) $('#checkpointHasTransfer').checked=false;
       const enabled=$('#checkpointHasTransfer').checked;
-      $('#checkpointTransferField').hidden=!enabled;
-      $('#checkpointTransferHint').textContent=`${fmt.format(available)} available to assign from this month's Transfer Out.`;
+      $('#checkpointTransferField').hidden=!hasTransferOut || !enabled;
+      $('#checkpointTransferHint').textContent=`Available: ${fmt.format(available)}`;
       if(enabled && !$('#checkpointTransfer').value && available>0) $('#checkpointTransfer').value=fmt.format(available);
     }
 
