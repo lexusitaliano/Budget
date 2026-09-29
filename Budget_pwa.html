@@ -881,9 +881,9 @@
   <dialog id="howDlg">
     <div class="dlgHead">Formulas</div>
     <div style="color: var(--muted); font-size: 14px;">
-      <p><b>Total Spend</b> is the sum of detected negative Balance Update changes after recorded Transfers Out are reconciled.</p>
+      <p><b>Total Spend</b> is the sum of each negative Balance Update change, less only the Transfer Out explicitly applied to that update.</p>
       <p><b>Withdrawals</b> = max(Total Spend − CC Spend, 0). It means detected outflow not attributed to CC Spend, not necessarily ATM cash.</p>
-      <p><b>Transfers Out</b> intentionally lowers Adjusted Start and is excluded from Total Spend.</p>
+      <p><b>Transfers Out</b> lowers Adjusted Start. Unassigned Transfer Out does not reduce Total Spend; applying it to a positive change does not imply hidden spending.</p>
       <p><b>Saved</b> = End (or latest Balance Update) − Adjusted Start, where Adjusted Start = Start − Transfers Out.</p>
     </div>
     <div class="dlgActions">
@@ -913,6 +913,8 @@
       <div class="ios-group">
         <div class="ios-field"><label for="checkpointDate">Date</label><input id="checkpointDate" type="date" required /></div>
         <div class="ios-field"><label for="checkpointBalance">Checking Balance</label><input id="checkpointBalance" type="text" inputmode="decimal" placeholder="$0.00" required /></div>
+        <label class="ios-field" for="checkpointHasTransfer"><span>Includes Transfer Out</span><span class="switch"><input id="checkpointHasTransfer" type="checkbox" /><span class="switchTrack" aria-hidden="true"></span></span></label>
+        <div class="ios-field" id="checkpointTransferField" hidden><label for="checkpointTransfer">Transfer Out Applied</label><input id="checkpointTransfer" type="text" inputmode="decimal" placeholder="$0.00" /><div class="hint" id="checkpointTransferHint"></div></div>
       </div>
       <div class="errors" id="checkpointErrors" aria-live="polite"></div>
       <div class="dlgActions"><button class="btn full" type="button" id="cancelCheckpoint">Cancel</button><button class="btn primary full" type="submit">Save</button></div>
@@ -971,7 +973,8 @@
       raw.forEach(item => {
         const date = String(item?.date || '');
         const balance = parseDecimal(item?.balance);
-        if(isValidLocalDateId(date) && date <= localDateId() && Number.isFinite(balance)) byDate.set(date, {date, balance:clampMoney(balance)});
+        const transferApplied = Math.max(parseDecimal(item?.transferApplied) || 0, 0);
+        if(isValidLocalDateId(date) && date <= localDateId() && Number.isFinite(balance)) byDate.set(date, {date, balance:clampMoney(balance), ...(transferApplied ? {transferApplied:clampMoney(transferApplied)} : {})});
       });
       return Array.from(byDate.values()).sort((a,b)=>a.date.localeCompare(b.date));
     }
@@ -982,6 +985,22 @@
         previousBalance = checkpoint.balance;
         return {...checkpoint, change};
       });
+    }
+    function getTransferAttribution(record){
+      const assigned = clampMoney(normalizeCheckpoints(record?.checkpoints).reduce((sum, cp)=>sum + (Number(cp.transferApplied) || 0), 0));
+      const total = getTransferOutTotal(record);
+      return {total, assigned, remaining:clampMoney(Math.max(total - assigned, 0))};
+    }
+    function validateTransferAttributions(record){
+      const errors = [];
+      getCheckpointChanges(record).forEach(cp=>{
+        const applied = Number(cp.transferApplied) || 0;
+        const decrease = Math.max(-cp.change, 0);
+        if(applied > decrease) errors.push(`Transfer Out Applied on ${cp.date} cannot exceed its ${fmt.format(decrease)} decrease.`);
+      });
+      const attribution = getTransferAttribution(record);
+      if(attribution.assigned > attribution.total) errors.push(`Assigned Transfer Out cannot exceed the month's ${fmt.format(attribution.total)} total.`);
+      return errors;
     }
     function isCurrentMonth(id){ return id === localDateId().slice(0,7); }
     function hasEndBalance(record){ return Number.isFinite(record?.end); }
@@ -1014,16 +1033,11 @@
       return clampMoney(balance - getAdjustedStart(record));
     }
     function getTotalSpend(record){
-      const negativeMovements = getCheckpointChanges(record)
-        .filter(checkpoint => checkpoint.change < 0)
-        .map(checkpoint => Math.abs(checkpoint.change));
-      let unreconciledTransfers = getTransferOutTotal(record);
-      const qualifyingSpend = negativeMovements.reduce((total, movement) => {
-        // Transfers Out are stored as one undated monthly total. Reconcile that
-        // total once, against chronological decreases, without inventing dates.
-        const reconciled = Math.min(movement, unreconciledTransfers);
-        unreconciledTransfers = clampMoney(unreconciledTransfers - reconciled);
-        return clampMoney(total + Math.max(movement - reconciled, 0));
+      const qualifyingSpend = getCheckpointChanges(record).reduce((total, checkpoint) => {
+        if(checkpoint.change >= 0) return total;
+        const movement = Math.abs(checkpoint.change);
+        const applied = Math.max(Number(checkpoint.transferApplied) || 0, 0);
+        return clampMoney(total + Math.max(movement - applied, 0));
       }, 0);
       return clampMoney(Math.max(qualifyingSpend, 0));
     }
@@ -1443,15 +1457,17 @@
     }
     function checkpointsMarkup(m){
       const open = expandedCheckpointMonths.has(m.id);
+      const attribution = getTransferAttribution(m);
       const rows = getCheckpointChanges(m).map(cp=>{
         const changeClass = cp.change > 0 ? 'good' : cp.change < 0 ? 'bad' : '';
         const dateLabel = new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'}).format(new Date(...cp.date.split('-').map((v,i)=>Number(v)-(i===1?1:0))));
         const menuOpen = openCheckpointMenu === `${m.id}:${cp.date}`;
+        const transfer = cp.transferApplied ? `<span class="checkpointChange" aria-label="Transfer Out applied: ${fmt.format(cp.transferApplied)}">Transfer Out: ${fmt.format(cp.transferApplied)}</span>` : '';
         const change = state.ui.showBalanceChange ? `<span class="checkpointChange ${changeClass}" aria-label="Change from previous balance: ${fmtBalanceChange(cp.change)}">${fmtBalanceChange(cp.change)}</span>` : '';
-        return `<div class="checkpointRow"><span>${dateLabel}</span><span class="checkpointValues"><span class="amount">${fmt.format(cp.balance)}</span>${change}</span><div class="checkpointActions"><button class="btn iconbtn" type="button" data-act="checkpoint-menu" data-id="${m.id}" data-date="${cp.date}" aria-label="More actions for balance update from ${cp.date}" aria-haspopup="menu" aria-expanded="${menuOpen}">•••</button>${menuOpen?`<div class="checkpointMenu" role="menu"><button class="btn" type="button" role="menuitem" data-act="checkpoint-edit" data-id="${m.id}" data-date="${cp.date}">Edit</button><button class="btn danger" type="button" role="menuitem" data-act="checkpoint-delete" data-id="${m.id}" data-date="${cp.date}">Delete</button></div>`:''}</div></div>`;
+        return `<div class="checkpointRow"><span>${dateLabel}</span><span class="checkpointValues"><span class="amount">${fmt.format(cp.balance)}</span>${change}${transfer}</span><div class="checkpointActions"><button class="btn iconbtn" type="button" data-act="checkpoint-menu" data-id="${m.id}" data-date="${cp.date}" aria-label="More actions for balance update from ${cp.date}" aria-haspopup="menu" aria-expanded="${menuOpen}">•••</button>${menuOpen?`<div class="checkpointMenu" role="menu"><button class="btn" type="button" role="menuitem" data-act="checkpoint-edit" data-id="${m.id}" data-date="${cp.date}">Edit</button><button class="btn danger" type="button" role="menuitem" data-act="checkpoint-delete" data-id="${m.id}" data-date="${cp.date}">Delete</button></div>`:''}</div></div>`;
       }).join('');
       const preference = `<label class="checkpointPreference"><span>Show Balance Change</span><span class="switch"><input type="checkbox" data-act="checkpoint-change-visibility" aria-label="Show balance change" ${state.ui.showBalanceChange?'checked':''}><span class="switchTrack" aria-hidden="true"></span></span></label>`;
-      return `<div class="checkpointDisclosure"><button class="checkpointToggle" type="button" data-act="checkpoint-toggle" data-id="${m.id}" aria-expanded="${open}"><span>Balance Updates (${m.checkpoints.length})</span><span>${open?'⌄':'›'}</span></button>${open?`<div class="checkpointPanel"><div class="checkpointToolbar"><button class="btn small" type="button" data-act="checkpoint-add" data-id="${m.id}">+ Add Balance Update</button>${preference}</div>${rows || '<div class="hint">No balance updates yet.</div>'}</div>`:''}</div>`;
+      return `<div class="checkpointDisclosure"><button class="checkpointToggle" type="button" data-act="checkpoint-toggle" data-id="${m.id}" aria-expanded="${open}"><span>Balance Updates (${m.checkpoints.length})</span><span>${open?'⌄':'›'}</span></button>${open?`<div class="checkpointPanel"><div class="hint" style="margin-bottom:8px">Transfer Out: ${fmt.format(attribution.total)} · Assigned: ${fmt.format(attribution.assigned)} · Unassigned: ${fmt.format(attribution.remaining)}</div><div class="checkpointToolbar"><button class="btn small" type="button" data-act="checkpoint-add" data-id="${m.id}">+ Add Balance Update</button>${preference}</div>${rows || '<div class="hint">No balance updates yet.</div>'}</div>`:''}</div>`;
     }
     function renderMonths(){
       const months = filterMonths(), kpiMonths = getChartMonths().filter(m=>!m.missing);
@@ -2055,9 +2071,22 @@
       const [y,m]=id.split('-').map(Number);
       $('#checkpointDate').max=[`${id}-${pad2(new Date(y,m,0).getDate())}`,localDateId()].sort()[0];
       $('#checkpointBalance').value=cp?fmt.format(cp.balance):'';
+      $('#checkpointHasTransfer').checked=!!cp?.transferApplied;
+      $('#checkpointTransfer').value=cp?.transferApplied?fmt.format(cp.transferApplied):'';
+      updateCheckpointTransferUi();
       $('#checkpointErrors').classList.remove('show');
       setDialogOpen($('#checkpointDlg'),true);
       if(!cp) setTimeout(()=>$('#checkpointBalance').focus(),120);
+    }
+    function updateCheckpointTransferUi(){
+      if(!checkpointEditing) return;
+      const month=state.months.find(m=>m.id===checkpointEditing.id);
+      const current=month?.checkpoints.find(cp=>cp.date===checkpointEditing.originalDate);
+      const available=clampMoney(getTransferAttribution(month).remaining + (Number(current?.transferApplied)||0));
+      const enabled=$('#checkpointHasTransfer').checked;
+      $('#checkpointTransferField').hidden=!enabled;
+      $('#checkpointTransferHint').textContent=`${fmt.format(available)} available to assign from this month's Transfer Out.`;
+      if(enabled && !$('#checkpointTransfer').value && available>0) $('#checkpointTransfer').value=fmt.format(available);
     }
 
     function wire(){
@@ -2106,6 +2135,13 @@
         
         errHost.classList.remove('show');
         const id = selectedId();
+        const sourceRecord=state.months.find(m=>m.id===(editingId || id));
+        const attributionErrors=validateTransferAttributions({id,...payload,checkpoints:sourceRecord?.checkpoints||[]});
+        if(attributionErrors.length){
+          errHost.classList.add('show');
+          errHost.innerHTML=attributionErrors.map(e=>`<div class="err">${e}</div>`).join('');
+          return;
+        }
         
         if(editingId){
           const editingIdx = state.months.findIndex(m => m.id === editingId);
@@ -2253,6 +2289,8 @@
           }
           const idx = state.months.findIndex(m => m.id === id);
           if(idx < 0) return;
+          const attributionErrors=validateTransferAttributions({...state.months[idx],...payload});
+          if(attributionErrors.length){toast(attributionErrors[0]);return;}
           state.months[idx] = {id, ...payload, checkpoints:state.months[idx].checkpoints || []};
           setInlineEditingState(null);
           saveState(); renderAll();
@@ -2286,7 +2324,10 @@
           if(confirm(`Delete balance update from ${label}?`)){
             const month=state.months.find(m=>m.id===id);
             month.checkpoints=month.checkpoints.filter(cp=>cp.date!==date);
-            saveState(); renderAll(); toast('Balance update deleted.');
+            const changes=getCheckpointChanges(month);
+            const invalidDates=new Set(changes.filter(cp=>(Number(cp.transferApplied)||0)>Math.max(-cp.change,0)).map(cp=>cp.date));
+            if(invalidDates.size) month.checkpoints=month.checkpoints.map(cp=>invalidDates.has(cp.date)?{date:cp.date,balance:cp.balance}:cp);
+            saveState(); renderAll(); toast(invalidDates.size?'Balance update deleted; invalid attribution returned to Unassigned.':'Balance update deleted.');
           }
         }
         if(act === 'del') {
@@ -2316,18 +2357,25 @@
       $('#cancelCheckpoint').addEventListener('click',()=>setDialogOpen($('#checkpointDlg'),false));
       $('#checkpointBalance').addEventListener('focus',()=>unformatInputMoney($('#checkpointBalance')));
       $('#checkpointBalance').addEventListener('blur',()=>formatInputMoney($('#checkpointBalance')));
+      $('#checkpointTransfer').addEventListener('focus',()=>unformatInputMoney($('#checkpointTransfer')));
+      $('#checkpointTransfer').addEventListener('blur',()=>formatInputMoney($('#checkpointTransfer'),true));
+      $('#checkpointHasTransfer').addEventListener('change',updateCheckpointTransferUi);
       $('#checkpointForm').addEventListener('submit',ev=>{
         ev.preventDefault(); if(!checkpointEditing) return;
         const {id,originalDate}=checkpointEditing, date=$('#checkpointDate').value, balance=parseDecimal($('#checkpointBalance').value);
+        const transferApplied=$('#checkpointHasTransfer').checked?parseDecimal($('#checkpointTransfer').value):0;
         const errors=[];
         if(!isValidLocalDateId(date) || date.slice(0,7)!==id) errors.push('Date must belong to the selected month.');
         if(date>localDateId()) errors.push('Balance update cannot be in the future.');
         if(!Number.isFinite(balance)) errors.push('Checking Balance must be a valid amount.');
-        const host=$('#checkpointErrors');
-        if(errors.length){host.classList.add('show');host.innerHTML=errors.map(e=>`<div class="err">${e}</div>`).join('');return;}
+        if($('#checkpointHasTransfer').checked && (!Number.isFinite(transferApplied) || transferApplied<=0)) errors.push('Transfer Out Applied must be greater than $0.00.');
         const month=state.months.find(m=>m.id===id);
         const next=month.checkpoints.filter(cp=>cp.date!==originalDate && cp.date!==date);
-        next.push({date,balance:clampMoney(balance)}); month.checkpoints=normalizeCheckpoints(next);
+        if(Number.isFinite(balance)) next.push({date,balance:clampMoney(balance),...(transferApplied>0?{transferApplied:clampMoney(transferApplied)}:{})});
+        errors.push(...validateTransferAttributions({...month,checkpoints:next}));
+        const host=$('#checkpointErrors');
+        if(errors.length){host.classList.add('show');host.innerHTML=errors.map(e=>`<div class="err">${e}</div>`).join('');return;}
+        month.checkpoints=normalizeCheckpoints(next);
         checkpointEditing=null; saveState(); setDialogOpen($('#checkpointDlg'),false); renderAll(); toast('Balance update saved.');
       });
 
@@ -2442,9 +2490,18 @@
           check('Positive movements do not offset Total Spend',getTotalSpend({...spendFixture,checkpoints:[{date:'2026-09-21',balance:1000},{date:'2026-09-22',balance:800},{date:'2026-09-23',balance:1500}]})===200);
           check('One negative movement',getTotalSpend({start:1000,tOut:0,checkpoints:[{date:'2026-09-21',balance:800}]})===200);
           check('No negative movement',getTotalSpend({start:1000,tOut:0,checkpoints:[{date:'2026-09-21',balance:1100},{date:'2026-09-22',balance:1100}]})===0);
-          check('Full Transfer Out reconciliation',getTotalSpend({start:5000,tOut:1000,checkpoints:[{date:'2026-09-21',balance:4000}]})===0);
-          check('Partial Transfer Out reconciliation',getTotalSpend({start:5000,tOut:1000,checkpoints:[{date:'2026-09-21',balance:3800}]})===200);
-          check('Transfer total reconciles once across decreases',getTotalSpend({start:5000,tOut:1000,checkpoints:[{date:'2026-09-20',balance:4700},{date:'2026-09-21',balance:4200},{date:'2026-09-22',balance:3000},{date:'2026-09-23',balance:4500}]})===1000);
+          check('Unassigned Transfer Out preserves spend',getTotalSpend({start:5000,tOut:1000,checkpoints:[{date:'2026-09-21',balance:4000}]})===1000);
+          check('Full Transfer Out attribution',getTotalSpend({start:5000,tOut:1000,checkpoints:[{date:'2026-09-21',balance:4000,transferApplied:1000}]})===0);
+          check('Partial Transfer Out attribution',getTotalSpend({start:5000,tOut:1000,checkpoints:[{date:'2026-09-21',balance:3800,transferApplied:1000}]})===200);
+          const completeTransfer={start:5000,end:null,cc:500,tOut:1000,checkpoints:[{date:'2026-09-05',balance:4700},{date:'2026-09-10',balance:4400},{date:'2026-09-15',balance:3200,transferApplied:1000},{date:'2026-09-20',balance:4500}]};
+          check('Attributed transfer does not affect unrelated decreases',getTotalSpend(completeTransfer)===800);
+          check('Complete example withdrawals',compute(completeTransfer).withdrawals===300);
+          check('Complete example saved',getAdjustedStart(completeTransfer)===4000&&getSavedAmount(completeTransfer)===500);
+          const splitTransfer={start:5000,tOut:1000,checkpoints:[{date:'2026-09-10',balance:4200,transferApplied:600},{date:'2026-09-20',balance:3600,transferApplied:400}]};
+          check('Multiple partial attributions',getTotalSpend(splitTransfer)===400&&getTransferAttribution(splitTransfer).remaining===0);
+          check('Attribution total validation',validateTransferAttributions({...splitTransfer,checkpoints:[...splitTransfer.checkpoints,{date:'2026-09-25',balance:3400,transferApplied:100}]}).length>0);
+          check('Attribution movement validation',validateTransferAttributions({start:5000,tOut:1000,checkpoints:[{date:'2026-09-20',balance:4800,transferApplied:500}]}).length>0);
+          check('Positive interval invents no spend',getTotalSpend({start:5000,tOut:1000,checkpoints:[{date:'2026-09-20',balance:6000,transferApplied:1000}]})===0);
           check('Withdrawals below CC Spend',getWithdrawals(1500,900)===600);
           check('Withdrawals equal CC Spend',getWithdrawals(500,500)===0);
           check('Withdrawals floor when CC exceeds spend',getWithdrawals(500,700)===0);
@@ -2457,7 +2514,7 @@
           check('Multiple Transfer Outs represented by monthly total',getAdjustedStart({start:10000,tOut:3000})===7000&&getSavedAmount({...savedCurrent,start:10000,tOut:3000,end:7500})===500);
           const historical=normalizeMonthRecord({id:'2026-09',start:5000,end:4800,cc:650,tOut:1000,checkpoints:[{date:'2026-09-20',balance:4700},{date:'2026-09-21',balance:4200},{date:'2026-09-22',balance:3000},{date:'2026-09-23',balance:4500}]});
           check('Historical month source data preserved',historical.end===4800&&historical.cc===650&&historical.tOut===1000&&historical.checkpoints.length===4);
-          check('Historical month derives revised metrics',compute(historical).totalSaved===800&&compute(historical).totalSpend===1000&&compute(historical).withdrawals===350);
+          check('Legacy month leaves Transfer Out unassigned',compute(historical).totalSaved===800&&compute(historical).totalSpend===2000&&compute(historical).withdrawals===1350);
           check('Signed change formatting',fmtBalanceChange(1250)==='+$1,250.00'&&fmtBalanceChange(-45.25)==='-$45.25');
           check('Compact chart currency',compactCurrency(800)==='$800'&&compactCurrency(1500)==='$1.5K'&&compactCurrency(-25000)==='-$25K');
           const flatDomain=paddedDomain([1000,1000]);
