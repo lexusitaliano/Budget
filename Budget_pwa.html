@@ -882,7 +882,7 @@
   <dialog id="howDlg">
     <div class="dlgHead">Formulas</div>
     <div style="color: var(--muted); font-size: 14px;">
-      <p><b>Total Spend</b> is the sum of each negative Balance Update change, less only the Transfer Out explicitly applied to that update.</p>
+      <p><b>Total Spend</b> is the greater of CC Spend or detected balance spending. Detected balance spending is the sum of each negative Balance Update change, less only the Transfer Out explicitly applied to that update.</p>
       <p><b>Withdrawals</b> = max(Total Spend − CC Spend, 0). It means detected outflow not attributed to CC Spend, not necessarily ATM cash.</p>
       <p><b>Transfers Out</b> lowers Adjusted Start. Unassigned Transfer Out does not reduce Total Spend; applying it to a positive change does not imply hidden spending.</p>
       <p><b>Saved</b> = End (or latest Balance Update) − Adjusted Start, where Adjusted Start = Start − Transfers Out.</p>
@@ -1019,13 +1019,8 @@
     }
     function validateTransferAttributions(record){
       const errors = [];
-      getBalanceUpdateCalculations(record).forEach(update=>{
-        // Compare cents from the unadjusted chronological movement. Comparing with
-        // spendContribution here would subtract the transfer before validating it.
-        const appliedCents = Math.round(update.transferApplied * 100);
-        const decreaseCents = Math.round(update.rawDecrease * 100);
-        if(appliedCents > decreaseCents) errors.push(`Transfer Out Applied on ${update.date} cannot exceed the ${fmt.format(update.rawDecrease)} balance decrease represented by this update.`);
-      });
+      // Transfer attribution explains a snapshot; only the month's real Transfer Out
+      // total constrains it. Net balance movement can also contain deposits or spending.
       const attribution = getTransferAttribution(record);
       if(attribution.assigned > attribution.total) errors.push(`Assigned Transfer Out cannot exceed the month's ${fmt.format(attribution.total)} total.`);
       return errors;
@@ -1060,9 +1055,11 @@
       if(!Number.isFinite(balance)) return 0;
       return clampMoney(balance - getAdjustedStart(record));
     }
+    function getDetectedBalanceSpend(record){
+      return clampMoney(Math.max(getBalanceUpdateCalculations(record).reduce((total, update) => clampMoney(total + update.spendContribution), 0), 0));
+    }
     function getTotalSpend(record){
-      const qualifyingSpend = getBalanceUpdateCalculations(record).reduce((total, update) => clampMoney(total + update.spendContribution), 0);
-      return clampMoney(Math.max(qualifyingSpend, 0));
+      return clampMoney(Math.max(getDetectedBalanceSpend(record), Number(record?.cc) || 0, 0));
     }
     function getWithdrawals(totalSpend, ccSpend){
       return clampMoney(Math.max((Number(totalSpend) || 0) - (Number(ccSpend) || 0), 0));
@@ -2470,7 +2467,7 @@
         const checks=[]; const check=(name,pass)=>checks.push({name,pass:!!pass});
         try{
           check('Date formatting',displayMonth('2025-01')==='January 2025');
-          check('No Balance Updates means no detected Total Spend',compute({start:100,end:80,cc:20,tOut:0,checkpoints:[]}).totalSpend===0);
+          check('No Balance Updates falls back to CC Spend',compute({start:100,end:80,cc:20,tOut:0,checkpoints:[]}).totalSpend===20);
           check('Transfer Out adjusts savings baseline',compute({start:5000,end:5800,cc:0,tOut:300}).totalSaved===1100);
           const goal=savingsGoalProgress({id:'2025-01',start:100,end:150,tOut:0,savingsGoal:75,checkpoints:[]});
           check('Savings goal calculation',goal.saved===50);
@@ -2529,16 +2526,16 @@
           check('Transfer smaller than raw decrease',validateTransferAttributions(smallerAssignment).length===0&&getTotalSpend(smallerAssignment)===1000);
           const partialAssignment={start:8000,tOut:5000,checkpoints:[{date:'2026-08-15',balance:2500,transferApplied:5000}]};
           check('Partial uncovered decrease becomes spend',validateTransferAttributions(partialAssignment).length===0&&getTotalSpend(partialAssignment)===500);
-          const excessiveAssignment={start:8000,tOut:5000,checkpoints:[{date:'2026-08-15',balance:4000,transferApplied:5000}]};
-          check('Transfer greater than raw decrease is rejected',validateTransferAttributions(excessiveAssignment).some(error=>error.includes('$4,000.00 balance decrease')));
+          const excessiveAssignment={start:8000,tOut:5000,checkpoints:[{date:'2026-08-15',balance:5000,transferApplied:5000}]};
+          check('Transfer greater than net decrease is allowed',validateTransferAttributions(excessiveAssignment).length===0);
           check('Existing assignment remains available during Edit',getAvailableTransferForCheckpoint(augustTransfer,'2026-08-15')===5000);
           const backdatedConflict={...augustTransfer,checkpoints:[...augustTransfer.checkpoints,{date:'2026-08-12',balance:7500}]};
-          check('Backdated entry detects invalidated attribution',validateTransferAttributions(backdatedConflict).some(error=>error.includes('2026-08-15')&&error.includes('$4,500.00')));
+          check('Backdated entry does not invalidate attribution',validateTransferAttributions(backdatedConflict).length===0);
           const deletedPredecessor={start:10000,tOut:5000,checkpoints:[{date:'2026-08-05',balance:14000},{date:'2026-08-10',balance:8000},{date:'2026-08-15',balance:3000,transferApplied:5000}]};
           const afterDelete={...deletedPredecessor,checkpoints:deletedPredecessor.checkpoints.filter(cp=>cp.date!=='2026-08-10')};
-          check('Deleting predecessor detects invalidated attribution',validateTransferAttributions(deletedPredecessor).length===0&&validateTransferAttributions(afterDelete).length>0);
-          check('Zero-change row rejects attribution',validateTransferAttributions({start:8000,tOut:5000,checkpoints:[{date:'2026-08-15',balance:8000,transferApplied:1}]}).length>0);
-          check('Positive-change row rejects attribution',validateTransferAttributions({start:8000,tOut:5000,checkpoints:[{date:'2026-08-15',balance:9000,transferApplied:1}]}).length>0);
+          check('Deleting predecessor does not invalidate attribution',validateTransferAttributions(deletedPredecessor).length===0&&validateTransferAttributions(afterDelete).length===0);
+          check('Zero-change row allows attribution',validateTransferAttributions({start:8000,tOut:5000,checkpoints:[{date:'2026-08-15',balance:8000,transferApplied:5000}]}).length===0);
+          check('Positive-change row allows attribution',validateTransferAttributions({start:8000,tOut:5000,checkpoints:[{date:'2026-08-15',balance:9000,transferApplied:5000}]}).length===0);
           check('No Transfer Out rejects attribution',validateTransferAttributions({start:8000,tOut:0,checkpoints:[{date:'2026-08-15',balance:7000,transferApplied:1}]}).length>0);
           check('Unassigned Transfer Out remains available',getAvailableTransferForCheckpoint({start:8000,tOut:5000,checkpoints:[{date:'2026-08-15',balance:7000}]})===5000);
           const completeTransfer={start:5000,end:null,cc:500,tOut:1000,checkpoints:[{date:'2026-09-05',balance:4700},{date:'2026-09-10',balance:4400},{date:'2026-09-15',balance:3200,transferApplied:1000},{date:'2026-09-20',balance:4500}]};
@@ -2548,8 +2545,12 @@
           const splitTransfer={start:5000,tOut:1000,checkpoints:[{date:'2026-09-10',balance:4200,transferApplied:600},{date:'2026-09-20',balance:3600,transferApplied:400}]};
           check('Multiple partial attributions',getTotalSpend(splitTransfer)===400&&getTransferAttribution(splitTransfer).remaining===0);
           check('Attribution total validation',validateTransferAttributions({...splitTransfer,checkpoints:[...splitTransfer.checkpoints,{date:'2026-09-25',balance:3400,transferApplied:100}]}).length>0);
-          check('Attribution movement validation',validateTransferAttributions({start:5000,tOut:1000,checkpoints:[{date:'2026-09-20',balance:4800,transferApplied:500}]}).length>0);
+          check('Monthly Transfer Out limit rejects $6,000 assignment',validateTransferAttributions({start:10000,tOut:5000,checkpoints:[{date:'2026-09-10',balance:7000,transferApplied:3000},{date:'2026-09-20',balance:5000,transferApplied:3000}]}).length>0);
+          check('Attribution is independent of balance movement',validateTransferAttributions({start:5000,tOut:1000,checkpoints:[{date:'2026-09-20',balance:4800,transferApplied:500}]}).length===0);
           check('Positive interval invents no spend',getTotalSpend({start:5000,tOut:1000,checkpoints:[{date:'2026-09-20',balance:6000,transferApplied:1000}]})===0);
+          check('Zero detected spend falls back to CC Spend',getTotalSpend({start:1000,cc:1200,tOut:0,checkpoints:[{date:'2026-09-20',balance:1100}]})===1200);
+          check('Detected spend greater than CC Spend',compute({start:3000,cc:1200,tOut:0,checkpoints:[{date:'2026-09-20',balance:1000}]}).totalSpend===2000&&compute({start:3000,cc:1200,tOut:0,checkpoints:[{date:'2026-09-20',balance:1000}]}).withdrawals===800);
+          check('CC Spend greater than detected spend',compute({start:1500,cc:1200,tOut:0,checkpoints:[{date:'2026-09-20',balance:1000}]}).totalSpend===1200&&compute({start:1500,cc:1200,tOut:0,checkpoints:[{date:'2026-09-20',balance:1000}]}).withdrawals===0);
           check('Withdrawals below CC Spend',getWithdrawals(1500,900)===600);
           check('Withdrawals equal CC Spend',getWithdrawals(500,500)===0);
           check('Withdrawals floor when CC exceeds spend',getWithdrawals(500,700)===0);
