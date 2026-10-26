@@ -859,6 +859,7 @@
       <button class="ios-field btn" id="exportCsv" style="width: 100%; border-radius: 0; background: transparent; text-align: left; display: block; border-bottom: 1px solid var(--border);">
         <label style="cursor: pointer; width: 100%; display: block;">📤 Export CSV</label>
       </button>
+      <button class="ios-field btn" id="exportExcel" style="width:100%; border-radius:0; background:transparent; text-align:left; display:block; border-bottom:1px solid var(--border);">📊 Export Excel</button>
       <button class="ios-field btn" id="exportBackup" style="width:100%; border-radius:0; background:transparent; text-align:left; display:block; border-bottom:1px solid var(--border);">💾 Export Backup</button>
       <label class="ios-field btn" for="importFile" style="width: 100%; border-radius: 0; background: transparent; text-align: left; display: block; border-bottom: 1px solid var(--border); cursor: pointer;">
         📥 Import CSV
@@ -1131,6 +1132,73 @@
       }
     }
     function saveState(){ localStorage.setItem(storeKey, JSON.stringify(state)); }
+
+    // Minimal offline XLSX writer: UTF-8 XML parts in a ZIP with stored entries.
+    // No compression or external library is needed for these two data-only sheets.
+    function zipWorkbook(files){
+      const encoder = new TextEncoder(), parts = [], directory = [];
+      let offset = 0;
+      const header = size => new DataView(new ArrayBuffer(size));
+      for(const [path, xml] of Object.entries(files)){
+        const name = encoder.encode(path), data = encoder.encode(xml);
+        let crc = 0xffffffff;
+        for(const byte of data){
+          crc ^= byte;
+          for(let bit=0;bit<8;bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+        }
+        crc = (crc ^ 0xffffffff) >>> 0;
+        const local = header(30);
+        local.setUint32(0,0x04034b50,true); local.setUint16(4,20,true);
+        local.setUint16(6,0x0800,true); local.setUint16(12,33,true);
+        local.setUint32(14,crc,true); local.setUint32(18,data.length,true);
+        local.setUint32(22,data.length,true); local.setUint16(26,name.length,true);
+        parts.push(local.buffer,name,data);
+        const central = header(46);
+        central.setUint32(0,0x02014b50,true); central.setUint16(4,20,true);
+        central.setUint16(6,20,true); central.setUint16(8,0x0800,true);
+        central.setUint16(14,33,true); central.setUint32(16,crc,true);
+        central.setUint32(20,data.length,true); central.setUint32(24,data.length,true);
+        central.setUint16(28,name.length,true); central.setUint32(42,offset,true);
+        directory.push(central.buffer,name);
+        offset += 30 + name.length + data.length;
+      }
+      const directorySize = directory.reduce((sum,part)=>sum+part.byteLength,0);
+      const end = header(22);
+      end.setUint32(0,0x06054b50,true);
+      end.setUint16(8,directory.length/2,true); end.setUint16(10,directory.length/2,true);
+      end.setUint32(12,directorySize,true); end.setUint32(16,offset,true);
+      return new Blob([...parts,...directory,end.buffer],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    }
+
+    function buildExcelWorkbook(months){
+      const xml = value => String(value).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+      const cell = (value, style=0) => value === null || value === undefined ? '<c/>' :
+        typeof value === 'number' ? `<c s="${style}"><v>${value}</v></c>` :
+        `<c t="inlineStr"><is><t>${xml(value)}</t></is></c>`;
+      const sheet = rows => `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows.map(cells=>`<row>${cells.join('')}</row>`).join('')}</sheetData></worksheet>`;
+      const monthly = [['month','start','end','cc','tOut','savingsGoal'].map(v=>cell(v))];
+      sortMonths(months,'ASC').forEach(m=>monthly.push([cell(m.id),...[m.start,m.end,m.cc,m.tOut,m.savingsGoal].map(v=>cell(v,1))]));
+      const history = [['Date','Month','Balance','Transfer Applied'].map(v=>cell(v))];
+      // Read saved checkpoints, not derived balances or the current display range.
+      const records = months.flatMap(m=>(m.checkpoints || []).map(cp=>({month:m.id,...cp})));
+      records.sort((a,b)=>a.date.localeCompare(b.date) || a.month.localeCompare(b.month));
+      for(const record of records){
+        const [year,month,day] = record.date.split('-').map(Number);
+        // Excel's 1900 date system includes a fictitious 1900-02-29.
+        const days = (Date.UTC(year,month-1,day)-Date.UTC(1899,11,31))/86400000;
+        const date = days + (record.date >= '1900-03-01' ? 1 : 0);
+        history.push([cell(date,2),cell(record.month),cell(record.balance,1),cell(record.transferApplied,1)]);
+      }
+      return zipWorkbook({
+        '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+        '_rels/.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        'xl/workbook.xml': '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Monthly Summary" sheetId="1" r:id="rId1"/><sheet name="Daily Balance History" sheetId="2" r:id="rId2"/></sheets></workbook>',
+        'xl/_rels/workbook.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+        'xl/styles.xml': '<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;$&quot;#,##0.00;[Red]-&quot;$&quot;#,##0.00"/></numFmts><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
+        'xl/worksheets/sheet1.xml': sheet(monthly),
+        'xl/worksheets/sheet2.xml': sheet(history)
+      });
+    }
 
     function sortMonths(arr, dir){
       const sign = dir === 'ASC' ? 1 : -1;
@@ -2432,6 +2500,15 @@
         sortMonths(state.months,'ASC').forEach(m=>rows.push([m.id,m.start.toFixed(2),hasEndBalance(m)?m.end.toFixed(2):'',m.cc.toFixed(2),m.tOut.toFixed(2),m.savingsGoal.toFixed(2)].join(',')));
         download('spending-tracker.csv',rows.join('\n'),'text/csv;charset=utf-8');
         toast('CSV exported. Use Export Backup to include balance updates.');
+      });
+      $('#exportExcel').addEventListener('click',()=>{
+        setDialogOpen($('#settingsMenu'),false);
+        try{
+          const saved = JSON.parse(localStorage.getItem(storeKey) || '{"months":[]}');
+          const workbook = buildExcelWorkbook(Array.isArray(saved.months) ? saved.months : []);
+          download('spending-tracker.xlsx',workbook,workbook.type);
+          toast('Excel exported with daily balance history.');
+        }catch(e){toast('Excel export failed. Saved data was not changed.');}
       });
       $('#exportBackup').addEventListener('click',()=>{
         setDialogOpen($('#settingsMenu'),false);
